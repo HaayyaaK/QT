@@ -1,0 +1,13 @@
+{
+  "name": "quant-terminal-dashboard",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Client-side crypto/FX trading terminal (single-file dashboard) with a dependency-free technical-analysis math engine.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

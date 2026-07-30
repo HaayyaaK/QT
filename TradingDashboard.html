@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  'unsafe-eval' is required by support.js's evalDcLogic(), which runs the
+  Component class below via `new Function(...)` — that's how the vendored
+  dc-runtime template compiler works, not something this file controls.
+  'unsafe-inline' (style-src) is required because panel styling is authored
+  as inline style="" attributes throughout this template; removing it would
+  need extracting every inline style to a stylesheet (tracked as deferred
+  Low-priority work, see README).
+-->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none';
+  base-uri 'self';
+  object-src 'none';
+  script-src 'self' 'unsafe-eval' https://unpkg.com https://s3.tradingview.com;
+  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+  font-src 'self' https://fonts.gstatic.com;
+  img-src 'self' data: https://s3.tradingview.com https://www.tradingview.com https://*.tradingview.com;
+  connect-src 'self' https://api.binance.com wss://stream.binance.com https://api.coingecko.com https://api.alternative.me https://query1.finance.yahoo.com;
+  frame-src https://s3.tradingview.com https://www.tradingview.com https://*.tradingview.com;
+">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { margin: 0; background: #0a0d12; }
+    a { color: #60a5fa; text-decoration: none; }
+    a:hover { color: #8ab4fb; }
+    @keyframes qt-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+    @keyframes qt-blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #232b38; border-radius: 4px; }
+    /* Reset native button chrome so converting interactive divs to real
+       <button> elements (keyboard + screen-reader semantics) is visually
+       identical to before — each button's own inline style re-specifies
+       whatever it needs on top of this. */
+    button { all: unset; box-sizing: border-box; cursor: pointer; }
+    button:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
+    @media (prefers-reduced-motion: reduce) {
+      * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+    }
+  </style>
+</helmet>
+
+<div style="min-height:100vh;background:#0a0d12;color:#dde3ea;font-family:'Inter',system-ui,sans-serif;padding:20px 24px 48px;box-sizing:border-box">
+
+  <header style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;padding-bottom:16px;border-bottom:1px solid #1e2530;margin-bottom:20px">
+    <div style="display:flex;align-items:center;gap:12px">
+      <div aria-hidden="true" style="width:9px;height:9px;border-radius:50%;background:{{ wsDotColor }};animation:qt-pulse 2s ease-in-out infinite"></div>
+      <h1 style="margin:0;font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:700;letter-spacing:0.5px;color:#eef1f5">QUANT<span style="color:#60a5fa">/</span>TERMINAL</h1>
+      <div role="status" aria-live="polite" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{{ wsStatusColor }};padding:3px 9px;border:1px solid {{ wsStatusColor }};border-radius:3px;white-space:nowrap">{{ wsStatusText }}</div>
+      <sc-if value="{{ wsOffline }}">
+        <button onClick="{{ reconnectWS }}" style="cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:11px;padding:3px 9px;border-radius:3px;border:1px solid #60a5fa;color:#60a5fa;background:transparent">Reconnect</button>
+      </sc-if>
+    </div>
+    <nav aria-label="Symbols" style="display:flex;gap:6px;flex-wrap:wrap;max-width:640px">
+      <sc-for list="{{ symbolChips }}" as="chip" hint-placeholder-count="10">
+        <button onClick="{{ chip.onClick }}" style="{{ chip.style }}">{{ chip.label }}</button>
+      </sc-for>
+    </nav>
+    <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#7b8494;white-space:nowrap">{{ clockText }} UTC</div>
+  </header>
+
+  <main>
+
+  <sc-if value="{{ hasSimulatedData }}">
+    <div role="status" style="margin-bottom:16px;padding:10px 14px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.35);border-radius:6px;font-size:12.5px;color:#fbbf24;line-height:1.5">
+      <b style="letter-spacing:0.5px">SIMULATED DATA</b> — live feed unavailable for {{ simulatedSymbolsText }}. Technical analysis, correlation, and alerts for these symbols use a synthetic fallback, not real market data.
+    </div>
+  </sc-if>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px">
+    <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:18px">
+      <h2 style="margin:0 0 14px;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">GLOBAL SENTIMENT &amp; MARKET HEALTH</h2>
+      <div style="display:flex;align-items:center;gap:24px">
+        <div role="img" aria-label="{{ sentimentAriaLabel }}" style="position:relative;width:120px;height:70px;overflow:hidden">
+          <div aria-hidden="true" style="position:absolute;width:120px;height:120px;border-radius:50%;background:conic-gradient(from 180deg,#f87171 0deg,#fbbf24 90deg,#34d399 180deg);clip-path:inset(0 0 50% 0)"></div>
+          <div aria-hidden="true" style="position:absolute;left:60px;bottom:0;width:2px;height:52px;background:#eef1f5;transform-origin:bottom center;transform:rotate({{ sentimentNeedleDeg }}deg)"></div>
+          <div aria-hidden="true" style="position:absolute;left:56px;bottom:-4px;width:8px;height:8px;border-radius:50%;background:#eef1f5"></div>
+        </div>
+        <div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:{{ sentimentColor }}">{{ sentimentLabel }}</div>
+          <div style="font-size:12px;color:#7b8494;margin-top:4px">Composite score {{ sentimentScore }}/100</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:20px;margin-top:16px;padding-top:14px;border-top:1px solid #1e2530">
+        <div>
+          <div style="font-size:10px;color:#7b8494;letter-spacing:0.5px">FEAR &amp; GREED (alternative.me)</div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:600;color:{{ fngColor }}">{{ fngValue }} · {{ fngLabel }}</div>
+        </div>
+        <div>
+          <div style="font-size:10px;color:#7b8494;letter-spacing:0.5px">AGGREGATE TA (client engine)</div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:600;color:{{ taAggColor }}">{{ taAggLabel }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:18px">
+      <h2 style="margin:0 0 14px;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">BTC / ETH DOMINANCE <span style="color:#4a5568">(coingecko.com)</span></h2>
+      <div style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:13px;margin-bottom:6px"><span style="color:#f7931a;font-weight:600">BTC</span><span>{{ btcDomText }}%</span></div>
+        <div style="height:8px;background:#1a2029;border-radius:4px;overflow:hidden"><div style="height:100%;width:{{ btcDomPct }}%;background:#f7931a"></div></div>
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:13px;margin-bottom:6px"><span style="color:#8c8fff;font-weight:600">ETH</span><span>{{ ethDomText }}%</span></div>
+        <div style="height:8px;background:#1a2029;border-radius:4px;overflow:hidden"><div style="height:100%;width:{{ ethDomPct }}%;background:#8c8fff"></div></div>
+      </div>
+      <div style="margin-top:16px;padding-top:14px;border-top:1px solid #1e2530;font-size:11px;color:#7b8494">Refreshes every 5 minutes · falls back to a cached estimate if the API is unreachable</div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px">
+    <div style="grid-column:span 2;background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px;min-height:0">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">ADVANCED CHART · {{ selectedLabel }} <span style="color:#4a5568">(TradingView embed)</span></h2>
+      </div>
+      <div style="position:relative;height:460px;background:#0d1015;border-radius:4px">
+        <div ref="{{ chartRef }}" style="width:100%;height:100%"></div>
+        <sc-if value="{{ widgetErrors.chart }}">
+          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:#0d1015;border-radius:4px">
+            <div style="color:#7b8494;font-size:12px">Chart widget blocked (ad-blocker or network)</div>
+            <button onClick="{{ retryChart }}" style="cursor:pointer;font-family:inherit;padding:6px 14px;border:1px solid #2a3342;border-radius:4px;font-size:12px;color:#60a5fa">Retry</button>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+
+    <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">L2 ORDER BOOK</h2>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#7b8494">spread {{ spreadText }}</div>
+      </div>
+      <sc-if value="{{ orderBookAvailable }}">
+        <div style="display:flex;justify-content:space-between;font-size:10px;color:#4a5568;padding:0 2px;margin-bottom:4px"><span>PRICE</span><span>QTY</span></div>
+        <sc-for list="{{ askRows }}" as="row" hint-placeholder-count="8">
+          <div style="position:relative;display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:12px;padding:2px 2px;color:#f87171">
+            <div style="position:absolute;right:0;top:0;bottom:0;width:{{ row.depthPct }}%;background:rgba(248,113,113,0.12)"></div>
+            <span style="position:relative">{{ row.price }}</span><span style="position:relative;color:#c7ccd6">{{ row.qty }}</span>
+          </div>
+        </sc-for>
+        <div style="text-align:center;font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;padding:6px 0;color:#eef1f5;border-top:1px solid #1e2530;border-bottom:1px solid #1e2530;margin:4px 0">{{ midPriceText }}</div>
+        <sc-for list="{{ bidRows }}" as="row" hint-placeholder-count="8">
+          <div style="position:relative;display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:12px;padding:2px 2px;color:#34d399">
+            <div style="position:absolute;right:0;top:0;bottom:0;width:{{ row.depthPct }}%;background:rgba(52,211,153,0.12)"></div>
+            <span style="position:relative">{{ row.price }}</span><span style="position:relative;color:#c7ccd6">{{ row.qty }}</span>
+          </div>
+        </sc-for>
+      </sc-if>
+      <sc-if value="{{ orderBookUnavailable }}">
+        <div style="height:300px;display:flex;align-items:center;justify-content:center;text-align:center;color:#4a5568;font-size:12px;padding:0 20px">Binance L2 stream covers crypto pairs only. Select BTC/USD or ETH/USD to view live depth.</div>
+      </sc-if>
+    </div>
+
+    <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
+      <h2 style="margin:0 0 8px;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">DEPTH CHART</h2>
+      <sc-if value="{{ orderBookAvailable }}">
+        <svg viewBox="0 0 300 220" style="width:100%;height:260px" preserveAspectRatio="none" role="img" aria-label="{{ depthChartTitle }}">
+          <title>{{ depthChartTitle }}</title>
+          <path d="{{ depthBidPath }}" fill="rgba(52,211,153,0.18)" stroke="#34d399" stroke-width="1.5"></path>
+          <path d="{{ depthAskPath }}" fill="rgba(248,113,113,0.18)" stroke="#f87171" stroke-width="1.5"></path>
+          <line x1="150" y1="0" x2="150" y2="220" stroke="#2a3342" stroke-dasharray="3,3"></line>
+        </svg>
+      </sc-if>
+      <sc-if value="{{ orderBookUnavailable }}">
+        <div style="height:260px;display:flex;align-items:center;justify-content:center;text-align:center;color:#4a5568;font-size:12px;padding:0 20px">Cumulative liquidity view needs the live Binance book — crypto pairs only.</div>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px">
+    <div style="grid-column:span 2;background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
+        <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">INDICATOR SNAPSHOT · {{ selectedLabel }} (1H)</h2>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{{ dataSourceColor }}">{{ dataSourceLabel }}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px">
+        <sc-for list="{{ indicatorRows }}" as="ind" hint-placeholder-count="8">
+          <div style="background:#0d1015;border:1px solid #1c2330;border-radius:4px;padding:10px 12px">
+            <div style="font-size:10px;color:#7b8494;letter-spacing:0.3px">{{ ind.name }}</div>
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:4px">
+              <span style="font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:600;color:#eef1f5">{{ ind.value }}</span>
+              <span style="font-size:11px;font-weight:600;color:{{ ind.color }}">{{ ind.signal }}</span>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
+      <h2 style="margin:0 0 10px;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">MULTI-TIMEFRAME TREND</h2>
+      <sc-for list="{{ mtfRows }}" as="tf" hint-placeholder-count="5">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 4px;border-bottom:1px solid #1a2029">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:13px;color:#c7ccd6">{{ tf.label }}</span>
+          <span style="font-size:12px;font-weight:600;padding:2px 10px;border-radius:3px;color:{{ tf.color }};background:{{ tf.bg }}">{{ tf.text }}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px;margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
+      <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">AUTOMATED ALERT STREAM</h2>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#4a5568">{{ alertCountText }}</div>
+    </div>
+    <div style="max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:6px">
+      <sc-for list="{{ alertRows }}" as="a" hint-placeholder-count="4">
+        <div style="display:flex;gap:10px;align-items:baseline;padding:7px 10px;background:#0d1015;border-left:3px solid {{ a.color }};border-radius:2px">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#4a5568;white-space:nowrap">{{ a.timeText }}</span>
+          <span style="font-size:10px;font-weight:700;color:{{ a.color }};text-transform:uppercase;letter-spacing:0.5px;white-space:nowrap">{{ a.type }}</span>
+          <span style="font-size:13px;color:#c7ccd6">{{ a.message }}</span>
+        </div>
+      </sc-for>
+      <sc-if value="{{ noAlerts }}">
+        <div style="text-align:center;padding:24px;color:#4a5568;font-size:12px">No signals triggered yet — scanning breakouts, crossovers, volume &amp; volatility across 10 symbols.</div>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px">
+    <div style="grid-column:span 2;background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
+        <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">CORRELATION MATRIX · PEARSON r (1H RETURNS)</h2>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#fbbf24">{{ anomalyCountText }}</div>
+      </div>
+      <div style="overflow-x:auto">
+        <table style="border-collapse:collapse;min-width:100%">
+          <caption style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap">Pearson correlation matrix of 1-hour returns across tracked symbols</caption>
+          <thead>
+            <tr>
+              <th scope="col" style="width:64px;flex-shrink:0"><span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Symbol</span></th>
+              <sc-for list="{{ corrHeaders }}" as="h" hint-placeholder-count="10">
+                <th scope="col" style="width:56px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;color:#7b8494;padding:2px">{{ h }}</th>
+              </sc-for>
+            </tr>
+          </thead>
+          <tbody>
+            <sc-for list="{{ corrRows }}" as="row" hint-placeholder-count="10">
+              <tr>
+                <th scope="row" style="width:64px;text-align:left;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;color:#7b8494;padding:2px">{{ row.label }}</th>
+                <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="10">
+                  <td title="{{ cell.title }}" style="width:56px;height:30px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:#0a0d12;font-weight:600;background:{{ cell.color }};border:{{ cell.border }}">{{ cell.rLabel }}</td>
+                </sc-for>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">SECTOR HEATMAP</h2>
+        <div style="display:flex;gap:4px">
+          <button onClick="{{ setHeatmapTab_fx }}" style="{{ heatmapTabFxStyle }}">FX</button>
+          <button onClick="{{ setHeatmapTab_crypto }}" style="{{ heatmapTabCryptoStyle }}">CRYPTO</button>
+        </div>
+      </div>
+      <div style="position:relative;height:340px;background:#0d1015;border-radius:4px">
+        <div ref="{{ heatmapRef }}" style="width:100%;height:100%"></div>
+        <sc-if value="{{ widgetErrors.heatmap }}">
+          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px">
+            <div style="color:#7b8494;font-size:12px">Heatmap widget blocked</div>
+            <button onClick="{{ retryHeatmap }}" style="cursor:pointer;font-family:inherit;padding:6px 14px;border:1px solid #2a3342;border-radius:4px;font-size:12px;color:#60a5fa">Retry</button>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+    <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
+      <h2 style="margin:0 0 10px;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">MACRO CALENDAR <span style="color:#4a5568">(TradingView embed)</span></h2>
+      <div style="position:relative;height:380px;background:#0d1015;border-radius:4px">
+        <div ref="{{ calendarRef }}" style="width:100%;height:100%"></div>
+        <sc-if value="{{ widgetErrors.calendar }}">
+          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px">
+            <div style="color:#7b8494;font-size:12px">Calendar widget blocked</div>
+            <button onClick="{{ retryCalendar }}" style="cursor:pointer;font-family:inherit;padding:6px 14px;border:1px solid #2a3342;border-radius:4px;font-size:12px;color:#60a5fa">Retry</button>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+
+    <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
+      <h2 style="margin:0 0 10px;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">ASSET-LINKED NEWS <span style="color:#4a5568">(TradingView embed)</span></h2>
+      <div style="position:relative;height:380px;background:#0d1015;border-radius:4px">
+        <div ref="{{ newsRef }}" style="width:100%;height:100%"></div>
+        <sc-if value="{{ widgetErrors.news }}">
+          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px">
+            <div style="color:#7b8494;font-size:12px">News widget blocked</div>
+            <button onClick="{{ retryNews }}" style="cursor:pointer;font-family:inherit;padding:6px 14px;border:1px solid #2a3342;border-radius:4px;font-size:12px;color:#60a5fa">Retry</button>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </div>
+
+  </main>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.symbols = [
+      { id: 'BTCUSDT', label: 'BTC/USD', type: 'crypto', tv: 'BINANCE:BTCUSDT', base: 65000 },
+      { id: 'ETHUSDT', label: 'ETH/USD', type: 'crypto', tv: 'BINANCE:ETHUSDT', base: 3200 },
+      { id: 'EURUSD', label: 'EUR/USD', type: 'fx', tv: 'FX:EURUSD', base: 1.08 },
+      { id: 'GBPUSD', label: 'GBP/USD', type: 'fx', tv: 'FX:GBPUSD', base: 1.27 },
+      { id: 'USDJPY', label: 'USD/JPY', type: 'fx', tv: 'FX:USDJPY', base: 155 },
+      { id: 'AUDUSD', label: 'AUD/USD', type: 'fx', tv: 'FX:AUDUSD', base: 0.66 },
+      { id: 'NZDUSD', label: 'NZD/USD', type: 'fx', tv: 'FX:NZDUSD', base: 0.61 },
+      { id: 'USDCAD', label: 'USD/CAD', type: 'fx', tv: 'FX:USDCAD', base: 1.37 },
+      { id: 'USDCHF', label: 'USD/CHF', type: 'fx', tv: 'FX:USDCHF', base: 0.91 },
+      { id: 'XAUUSD', label: 'XAU/USD', type: 'fx', tv: 'OANDA:XAUUSD', base: 2400 },
+    ];
+    this.chartRef = React.createRef();
+    this.heatmapRef = React.createRef();
+    this.calendarRef = React.createRef();
+    this.newsRef = React.createRef();
+    this.cache = {};
+    this.alertFlags = {};
+    this.ta = null;
+    this.ws = null;
+    this.reconnectDelay = 1000;
+    this.reconnectTimer = null;
+    this.unmounted = false;
+    this.pendingBook = null;
+    this.wsFailCount = 0;
+    this.MAX_WS_RECONNECT_ATTEMPTS = 6;
+    this.state = {
+      symbol: 'BTCUSDT',
+      clockText: '--:--:--',
+      wsStatus: 'connecting',
+      bids: [], asks: [], mid: null, spread: null,
+      indicatorSnapshot: null,
+      mtf: {},
+      alerts: [],
+      correlation: { headers: [], rows: [] },
+      anomalies: 0,
+      fng: { value: '--', label: 'loading' },
+      dominance: { btc: 52, eth: 17 },
+      widgetErrors: { chart: false, heatmap: false, calendar: false, news: false },
+      heatmapTab: 'fx',
+      dataSource: 'sim',
+    };
+  }
+
+  async componentDidMount() {
+    const taEngine = await import('./taEngine.js');
+    this.ta = taEngine;
+    this.clockTimer = setInterval(() => this.setState({ clockText: new Date().toISOString().substr(11, 8) }), 1000);
+    this.fetchGlobalMetrics();
+    this.metricsTimer = setInterval(() => this.fetchGlobalMetrics(), 300000);
+    this.fetchAllKlines();
+    this.klinesTimer = setInterval(() => this.fetchAllKlines(), 180000);
+    this.loadMTF(this.state.symbol);
+    this.connectWS(this.state.symbol);
+    this.mountChart();
+    this.mountHeatmap();
+    this.mountCalendar();
+    this.mountNews();
+  }
+
+  componentWillUnmount() {
+    this.unmounted = true;
+    clearInterval(this.clockTimer);
+    clearInterval(this.metricsTimer);
+    clearInterval(this.klinesTimer);
+    clearInterval(this.bookFlushTimer);
+    clearTimeout(this.reconnectTimer);
+    if (this.ws) { try { this.ws.close(); } catch (e) {} }
+  }
+
+  symMeta(id) { return this.symbols.find(s => s.id === id); }
+
+  // Reference-keyed memoization for renderVals()'s derived arrays. renderVals
+  // runs on every state update — including the 1s clock tick and the 100ms
+  // order-book flush — so without this, every panel's rows (correlation
+  // inputs aside, which are already precomputed in state) get rebuilt from
+  // scratch every second even when the underlying data hasn't changed.
+  memo(name, dep, compute) {
+    const c = this._memo || (this._memo = {});
+    const prev = c[name];
+    if (prev && prev.dep === dep) return prev.val;
+    const val = compute();
+    c[name] = { dep, val };
+    return val;
+  }
+
+  async fetchGlobalMetrics() {
+    try {
+      const r = await fetch('https://api.alternative.me/fng/?limit=1');
+      const j = await r.json();
+      const v = parseInt(j.data[0].value, 10);
+      this.setState({ fng: { value: v, label: j.data[0].value_classification } });
+    } catch (e) {
+      this.setState(s => ({ fng: { value: s.fng.value === '--' ? 50 : s.fng.value, label: 'unavailable' } }));
+    }
+    try {
+      const r = await fetch('https://api.coingecko.com/api/v3/global');
+      const j = await r.json();
+      const p = j.data.market_cap_percentage;
+      this.setState({ dominance: { btc: p.btc, eth: p.eth } });
+    } catch (e) { /* keep last known / seeded estimate */ }
+  }
+
+  async fetchBinanceKlines(symbol, interval, limit) {
+    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+    if (!r.ok) throw new Error('binance http ' + r.status);
+    const rows = await r.json();
+    if (!rows || rows.length < 20) throw new Error('insufficient');
+    return {
+      opens: rows.map(r => +r[1]), highs: rows.map(r => +r[2]), lows: rows.map(r => +r[3]),
+      closes: rows.map(r => +r[4]), volumes: rows.map(r => +r[5]),
+    };
+  }
+
+  // NOTE: query1.finance.yahoo.com does not send Access-Control-Allow-Origin
+  // for arbitrary browser origins, so this call is expected to fail with a
+  // CORS error in every unproxied deployment (confirmed against a live
+  // localhost origin — the browser blocks it before a response body is ever
+  // read). getKlinesForInterval() below catches that and falls back to
+  // taEngine.simulateKlines(), which is why all 8 FX/metal symbols normally
+  // run on synthetic data — surfaced to the user via the "SIMULATED DATA"
+  // banner and the dataSource chip, computed from this.cache[id].source.
+  // A real fix needs either a server-side proxy for this endpoint or a
+  // CORS-friendly paid FX data vendor — both are infrastructure decisions
+  // out of reach of this single static HTML file today.
+  async fetchYahoo(symbol, interval, range) {
+    const ySym = symbol === 'XAUUSD' ? 'XAUUSD=X' : `${symbol}=X`;
+    const r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ySym}?interval=${interval}&range=${range}`);
+    if (!r.ok) throw new Error('yahoo http ' + r.status);
+    const j = await r.json();
+    const res = j.chart.result[0];
+    const q = res.indicators.quote[0];
+    const closes = q.close.filter(v => v != null);
+    if (closes.length < 20) throw new Error('insufficient');
+    return { opens: q.open, highs: q.high, lows: q.low, closes: q.close, volumes: (q.volume || []).map(v => v || 1) };
+  }
+
+  async getKlinesForInterval(sym, interval, limit) {
+    try {
+      if (sym.type === 'crypto') {
+        const data = await this.fetchBinanceKlines(sym.id, interval, limit);
+        return { ...data, source: 'live' };
+      }
+      const yInterval = { '5m': '5m', '15m': '15m', '1h': '60m', '4h': '60m', '1d': '1d' }[interval] || '60m';
+      const range = interval === '1d' ? '6mo' : '5d';
+      const data = await this.fetchYahoo(sym.id, yInterval, range);
+      return { ...data, source: 'live' };
+    } catch (e) {
+      return { ...this.ta.simulateKlines(sym.id + interval, limit, sym.base), source: 'sim' };
+    }
+  }
+
+  async fetchAllKlines() {
+    const ta = this.ta;
+    // Fetched in parallel — these are 10 independent symbol requests with no
+    // shared rate-limit reason to serialize them (getKlinesForInterval never
+    // rejects; it already falls back to simulateKlines internally, but
+    // allSettled guards against a future change to that contract).
+    const results = await Promise.allSettled(
+      this.symbols.map(sym => this.getKlinesForInterval(sym, '1h', 200))
+    );
+    const allAlerts = [];
+    this.symbols.forEach((sym, i) => {
+      const r = results[i];
+      if (r.status !== 'fulfilled') return;
+      this.cache[sym.id] = r.value;
+      allAlerts.push(...this.detectAlerts(sym, r.value));
+    });
+    const returns = {};
+    this.symbols.forEach(s => { returns[s.id] = ta.pctChanges((this.cache[s.id] || {}).closes || []); });
+    const rows = [];
+    let anomalies = 0;
+    this.symbols.forEach((s1, i) => {
+      const cells = this.symbols.map((s2, j) => {
+        const r = ta.pearson(returns[s1.id], returns[s2.id]);
+        const rv = r == null ? 0 : r;
+        let anomaly = false;
+        if (i !== j) {
+          const n = Math.min(returns[s1.id].length, returns[s2.id].length);
+          const half = Math.floor(n / 2);
+          const hist = ta.pearson(returns[s1.id].slice(0, half), returns[s2.id].slice(0, half));
+          const rec = ta.pearson(returns[s1.id].slice(-half), returns[s2.id].slice(-half));
+          if (hist != null && rec != null && hist > 0.8 && rec < 0.2) anomaly = true;
+        }
+        if (anomaly) anomalies++;
+        return this.corrCell(rv, i === j, anomaly);
+      });
+      rows.push({ label: s1.label, cells });
+    });
+    if (!this.unmounted) {
+      this.setState(s => ({
+        correlation: { headers: this.symbols.map(s => s.label), rows },
+        anomalies,
+        alerts: [...allAlerts, ...s.alerts].slice(0, 60),
+        indicatorSnapshot: this.buildSnapshot(this.cache[s.symbol]),
+        dataSource: (this.cache[s.symbol] || {}).source || 'sim',
+      }));
+    }
+  }
+
+  corrCell(r, isSelf, anomaly) {
+    const t = (r + 1) / 2;
+    const neg = [248, 113, 113], mid = [30, 35, 45], pos = [52, 211, 153];
+    const c = t < 0.5 ? this.lerpColor(neg, mid, t * 2) : this.lerpColor(mid, pos, (t - 0.5) * 2);
+    return {
+      rLabel: isSelf ? '—' : r.toFixed(2),
+      title: `${r.toFixed(3)}`,
+      color: isSelf ? '#1a2029' : `rgb(${c[0]},${c[1]},${c[2]})`,
+      border: anomaly ? '2px solid #fbbf24' : '1px solid #0a0d12',
+    };
+  }
+
+  lerpColor(a, b, t) { return a.map((v, i) => Math.round(v + (b[i] - v) * t)); }
+
+  buildSnapshot(k) {
+    if (!k) return null;
+    const ta = this.ta;
+    const { highs, lows, closes, volumes } = k;
+    const rsi = ta.last(ta.rsi(closes));
+    const { histogram } = ta.macd(closes);
+    const macdH = ta.last(histogram);
+    const e20 = ta.last(ta.ema(closes, 20)), e50 = ta.last(ta.ema(closes, 50)), e200 = ta.last(ta.ema(closes, 200));
+    const vwap = ta.last(ta.vwap(highs, lows, closes, volumes));
+    const bb = ta.bollinger(closes, 20, 2);
+    const bbUpper = ta.last(bb.upper), bbLower = ta.last(bb.lower);
+    const atr = ta.last(ta.atr(highs, lows, closes, 14));
+    const adx = ta.last(ta.adx(highs, lows, closes, 14));
+    const stoch = ta.stochastic(highs, lows, closes, 14, 3, 3);
+    const stochK = ta.last(stoch.k);
+    const close = ta.last(closes);
+    return { rsi, macdH, e20, e50, e200, vwap, bbUpper, bbLower, atr, adx, stochK, close };
+  }
+
+  detectAlerts(sym, k) {
+    const ta = this.ta;
+    const { highs, lows, closes, volumes } = k;
+    const donch = ta.donchian(highs, lows, 20);
+    const lastClose = ta.last(closes);
+    const prevUpper = donch.upper[donch.upper.length - 2], prevLower = donch.lower[donch.lower.length - 2];
+    const flags = this.alertFlags[sym.id] || {};
+    const alerts = [];
+    const mk = (type, color, message) => ({ id: Date.now() + Math.random(), ts: Date.now(), type, color, message });
+    const brokeUp = prevUpper != null && lastClose > prevUpper;
+    const brokeDown = prevLower != null && lastClose < prevLower;
+    if (brokeUp && !flags.brokeUp) alerts.push(mk('breakout', '#34d399', `${sym.label} broke above 20-period Donchian high`));
+    if (brokeDown && !flags.brokeDown) alerts.push(mk('breakout', '#f87171', `${sym.label} broke below 20-period Donchian low`));
+    const { histogram } = ta.macd(closes);
+    const h1 = histogram[histogram.length - 1], h2 = histogram[histogram.length - 2];
+    if (h1 != null && h2 != null && h2 <= 0 && h1 > 0) alerts.push(mk('reversal', '#34d399', `${sym.label} MACD bullish crossover`));
+    if (h1 != null && h2 != null && h2 >= 0 && h1 < 0) alerts.push(mk('reversal', '#f87171', `${sym.label} MACD bearish crossover`));
+    const r = ta.last(ta.rsi(closes));
+    const overbought = r != null && r > 70, oversold = r != null && r < 30;
+    if (overbought && !flags.overbought) alerts.push(mk('reversal', '#fbbf24', `${sym.label} RSI overbought (${r.toFixed(1)})`));
+    if (oversold && !flags.oversold) alerts.push(mk('reversal', '#fbbf24', `${sym.label} RSI oversold (${r.toFixed(1)})`));
+    const volSma = ta.sma(volumes, 20); const lv = ta.last(volumes); const lvSma = ta.last(volSma);
+    const volSpike = lvSma && lv > lvSma * 3;
+    if (volSpike && !flags.volSpike) alerts.push(mk('volume', '#60a5fa', `${sym.label} volume spike ${(lv / lvSma).toFixed(1)}x 20-SMA`));
+    const atrArr = ta.atr(highs, lows, closes, 14); const atrSma = ta.sma(atrArr.map(v => v || 0), 20);
+    const la = ta.last(atrArr), lasma = ta.last(atrSma);
+    const volSurge = lasma && la > lasma * 2;
+    if (volSurge && !flags.volSurge) alerts.push(mk('volatility', '#fbbf24', `${sym.label} ATR surge ${(la / lasma).toFixed(1)}x 14/20 avg`));
+    this.alertFlags[sym.id] = { brokeUp, brokeDown, overbought, oversold, volSpike, volSurge };
+    return alerts;
+  }
+
+  async loadMTF(symbolId) {
+    const sym = this.symMeta(symbolId);
+    const tfs = [['5m', '5m'], ['15m', '15m'], ['1h', '1h'], ['4h', '4h'], ['1D', '1d']];
+    const results = await Promise.allSettled(
+      tfs.map(([, interval]) => this.getKlinesForInterval(sym, interval, 120))
+    );
+    // Guard against a race: if the user switched to a different symbol while
+    // these requests were in flight, this response is stale — discard it
+    // rather than overwriting the MTF panel with the wrong symbol's trend.
+    if (this.unmounted || this.state.symbol !== symbolId) return;
+    const mtf = {};
+    tfs.forEach(([label], i) => {
+      const r = results[i];
+      mtf[label] = r.status === 'fulfilled' ? this.ta.trendLabel(r.value.closes) : 'flat';
+    });
+    if (!this.unmounted && this.state.symbol === symbolId) this.setState({ mtf });
+  }
+
+  changeSymbol(id) {
+    if (id === this.state.symbol) return;
+    this.setState({ symbol: id, indicatorSnapshot: this.buildSnapshot(this.cache[id]), bids: [], asks: [] });
+    this.loadMTF(id);
+    this.connectWS(id);
+    this.mountChart(id);
+  }
+
+  connectWS(symbolId) {
+    clearInterval(this.bookFlushTimer);
+    clearTimeout(this.reconnectTimer);
+    if (this.ws) { try { this.ws.close(); } catch (e) {} this.ws = null; }
+    const sym = this.symMeta(symbolId);
+    if (sym.type !== 'crypto') { this.setState({ wsStatus: 'unavailable' }); return; }
+    this.reconnectDelay = 1000;
+    this.wsFailCount = 0;
+    this._openWS(symbolId);
+  }
+
+  // Manual reconnect after the connection has been marked 'offline' —
+  // resets the failure counter and backoff so it gets a fresh run of
+  // automatic retries rather than immediately re-declaring itself offline.
+  manualReconnectWS() {
+    this.connectWS(this.state.symbol);
+  }
+
+  _openWS(symbolId) {
+    if (this.unmounted) return;
+    this.setState({ wsStatus: 'connecting' });
+    const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${symbolId.toLowerCase()}@depth20@100ms`);
+    this.ws = ws;
+    ws.onopen = () => { this.reconnectDelay = 1000; this.wsFailCount = 0; this.setState({ wsStatus: 'connected' }); };
+    ws.onmessage = (ev) => { this.pendingBook = JSON.parse(ev.data); };
+    ws.onerror = () => {};
+    ws.onclose = () => {
+      if (this.unmounted || this.state.symbol !== symbolId) return;
+      this.wsFailCount++;
+      if (this.wsFailCount >= this.MAX_WS_RECONNECT_ATTEMPTS) {
+        // Stop retrying automatically — a truly dead connection (region
+        // block, extended outage) should tell the user, not silently churn
+        // reconnect attempts forever in a background tab. connectWS() /
+        // manualReconnectWS() (wired to a "Reconnect" control) resets this.
+        this.setState({ wsStatus: 'offline' });
+        return;
+      }
+      this.setState({ wsStatus: 'reconnecting' });
+      this.reconnectTimer = setTimeout(() => { this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000); this._openWS(symbolId); }, this.reconnectDelay);
+    };
+    clearInterval(this.bookFlushTimer);
+    this.bookFlushTimer = setInterval(() => {
+      if (!this.pendingBook) return;
+      const b = this.pendingBook; this.pendingBook = null;
+      const bids = (b.bids || []).map(([p, q]) => [+p, +q]).slice(0, 12);
+      const asks = (b.asks || []).map(([p, q]) => [+p, +q]).slice(0, 12);
+      const mid = bids[0] && asks[0] ? (bids[0][0] + asks[0][0]) / 2 : null;
+      const spread = bids[0] && asks[0] ? asks[0][0] - bids[0][0] : null;
+      this.setState({ bids, asks, mid, spread });
+    }, 100);
+  }
+
+  mountWidget(ref, key, src, config) {
+    if (!ref.current) return;
+    ref.current.innerHTML = '';
+    this.setState(s => ({ widgetErrors: { ...s.widgetErrors, [key]: false } }));
+    const script = document.createElement('script');
+    script.src = src; script.async = true; script.type = 'text/javascript';
+    script.textContent = JSON.stringify(config);
+    ref.current.appendChild(script);
+    setTimeout(() => {
+      if (this.unmounted || !ref.current) return;
+      const ok = ref.current.querySelector('iframe');
+      if (!ok) this.setState(s => ({ widgetErrors: { ...s.widgetErrors, [key]: true } }));
+    }, 5000);
+  }
+
+  mountChart(symbolId) {
+    const sym = this.symMeta(symbolId || this.state.symbol);
+    this.mountWidget(this.chartRef, 'chart', 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js', {
+      autosize: true, symbol: sym.tv, interval: '60', timezone: 'Etc/UTC', theme: 'dark', style: '1',
+      locale: 'en', backgroundColor: 'rgba(13,16,21,1)', gridColor: 'rgba(30,37,48,0.4)',
+      allow_symbol_change: false, hide_side_toolbar: true, support_host: 'https://www.tradingview.com',
+    });
+  }
+
+  mountHeatmap() {
+    const isFx = this.state.heatmapTab === 'fx';
+    const src = isFx ? 'https://s3.tradingview.com/external-embedding/embed-widget-forex-heat-map.js' : 'https://s3.tradingview.com/external-embedding/embed-widget-crypto-coins-heatmap.js';
+    const config = isFx
+      ? { width: '100%', height: '100%', currencies: ['EUR', 'USD', 'JPY', 'GBP', 'CHF', 'AUD', 'CAD', 'NZD'], isTransparent: true, colorTheme: 'dark', locale: 'en' }
+      : { dataSource: 'Crypto', width: '100%', height: '100%', colorTheme: 'dark', isTransparent: true, locale: 'en' };
+    this.mountWidget(this.heatmapRef, 'heatmap', src, config);
+  }
+
+  mountCalendar() {
+    this.mountWidget(this.calendarRef, 'calendar', 'https://s3.tradingview.com/external-embedding/embed-widget-events.js', {
+      colorTheme: 'dark', isTransparent: true, width: '100%', height: '100%', locale: 'en', importanceFilter: '-1,0,1',
+    });
+  }
+
+  mountNews() {
+    this.mountWidget(this.newsRef, 'news', 'https://s3.tradingview.com/external-embedding/embed-widget-timeline.js', {
+      feedMode: 'all_symbols', colorTheme: 'dark', isTransparent: true, displayMode: 'regular', width: '100%', height: '100%', locale: 'en',
+    });
+  }
+
+  setHeatmapTab(tab) { this.setState({ heatmapTab: tab }, () => this.mountHeatmap()); }
+
+  renderVals() {
+    const s = this.state;
+    const sym = this.symMeta(s.symbol);
+    const wsColorMap = { connected: '#34d399', connecting: '#fbbf24', reconnecting: '#fbbf24', offline: '#f87171', unavailable: '#7b8494' };
+    const wsTextMap = { connected: 'LIVE', connecting: 'CONNECTING', reconnecting: 'RECONNECTING', offline: 'OFFLINE', unavailable: 'FX — NO L2' };
+    const wsStatusColor = wsColorMap[s.wsStatus] || '#7b8494';
+
+    const checkedSymbols = this.symbols.filter(sm => this.cache[sm.id]);
+    const simulatedSymbols = checkedSymbols.filter(sm => this.cache[sm.id].source !== 'live');
+    const hasSimulatedData = simulatedSymbols.length > 0;
+    const simulatedSymbolsText = simulatedSymbols.map(sm => sm.label).join(', ');
+
+    const symbolChips = this.memo('symbolChips', s.symbol, () => this.symbols.map(sm => ({
+      label: sm.label,
+      onClick: () => this.changeSymbol(sm.id),
+      style: `cursor:pointer;font:inherit;font-family:'JetBrains Mono',monospace;font-size:11px;padding:5px 10px;border-radius:3px;border:1px solid ${sm.id === s.symbol ? '#60a5fa' : '#1e2530'};color:${sm.id === s.symbol ? '#60a5fa' : '#7b8494'};background:${sm.id === s.symbol ? 'rgba(96,165,250,0.08)' : 'transparent'}`,
+    })));
+
+    const fngValue = s.fng.value, fngLabel = s.fng.label;
+    const fngColor = fngValue < 40 ? '#f87171' : fngValue > 60 ? '#34d399' : '#fbbf24';
+    const snap = s.indicatorSnapshot;
+    const taScore = snap ? (
+      (snap.rsi > 50 ? 1 : -1) + (snap.macdH > 0 ? 1 : -1) + (snap.close > snap.e20 ? 1 : -1) + (snap.close > snap.vwap ? 1 : -1)
+    ) : 0;
+    const taAggLabel = taScore >= 2 ? 'Bullish' : taScore <= -2 ? 'Bearish' : 'Neutral';
+    const taAggColor = taScore >= 2 ? '#34d399' : taScore <= -2 ? '#f87171' : '#fbbf24';
+    const composite = Math.round((((typeof fngValue === 'number' ? fngValue : 50) - 50) + taScore * 12.5) / 2 + 50);
+    const clamped = Math.max(0, Math.min(100, composite));
+    const sentimentLabel = clamped > 60 ? 'GREED' : clamped < 40 ? 'FEAR' : 'NEUTRAL';
+    const sentimentColor = clamped > 60 ? '#34d399' : clamped < 40 ? '#f87171' : '#fbbf24';
+    const sentimentNeedleDeg = -90 + (clamped / 100) * 180;
+
+    const indicatorRows = this.memo('indicatorRows', snap, () => snap ? [
+      { name: 'RSI (14)', value: snap.rsi.toFixed(1), signal: snap.rsi > 70 ? 'Overbought' : snap.rsi < 30 ? 'Oversold' : 'Neutral', color: snap.rsi > 70 ? '#f87171' : snap.rsi < 30 ? '#34d399' : '#7b8494' },
+      { name: 'MACD (12,26,9)', value: snap.macdH.toFixed(3), signal: snap.macdH > 0 ? 'Bullish' : 'Bearish', color: snap.macdH > 0 ? '#34d399' : '#f87171' },
+      { name: 'EMA 20/50/200', value: snap.e20.toFixed(2), signal: snap.close > snap.e20 && snap.e20 > snap.e50 ? 'Bullish' : snap.close < snap.e20 && snap.e20 < snap.e50 ? 'Bearish' : 'Mixed', color: snap.close > snap.e20 && snap.e20 > snap.e50 ? '#34d399' : snap.close < snap.e20 && snap.e20 < snap.e50 ? '#f87171' : '#fbbf24' },
+      { name: 'VWAP', value: snap.vwap.toFixed(2), signal: snap.close > snap.vwap ? 'Bullish' : 'Bearish', color: snap.close > snap.vwap ? '#34d399' : '#f87171' },
+      { name: 'Bollinger (20,2)', value: snap.close.toFixed(2), signal: snap.close > snap.bbUpper ? 'Overbought' : snap.close < snap.bbLower ? 'Oversold' : 'Inside bands', color: snap.close > snap.bbUpper ? '#f87171' : snap.close < snap.bbLower ? '#34d399' : '#7b8494' },
+      { name: 'ATR (14)', value: snap.atr.toFixed(3), signal: 'Volatility', color: '#60a5fa' },
+      { name: 'ADX (14)', value: snap.adx.toFixed(1), signal: snap.adx > 25 ? 'Trending' : 'Ranging', color: snap.adx > 25 ? '#60a5fa' : '#7b8494' },
+      { name: 'Stochastic (14,3,3)', value: snap.stochK.toFixed(1), signal: snap.stochK > 80 ? 'Overbought' : snap.stochK < 20 ? 'Oversold' : 'Neutral', color: snap.stochK > 80 ? '#f87171' : snap.stochK < 20 ? '#34d399' : '#7b8494' },
+    ] : []);
+
+    const mtfRows = this.memo('mtfRows', s.mtf, () => ['5m', '15m', '1h', '4h', '1D'].map(label => {
+      const t = s.mtf[label] || 'flat';
+      const map = { bull: ['Bullish', '#34d399', 'rgba(52,211,153,0.1)'], bear: ['Bearish', '#f87171', 'rgba(248,113,113,0.1)'], flat: ['Flat', '#7b8494', 'rgba(123,132,148,0.08)'] };
+      const [text, color, bg] = map[t];
+      return { label, text, color, bg };
+    }));
+
+    const alertRows = this.memo('alertRows', s.alerts, () => s.alerts.map(a => ({ ...a, timeText: new Date(a.ts).toISOString().substr(11, 8) })));
+
+    const isCrypto = sym.type === 'crypto';
+    // s.bids and s.asks are always replaced together in the same setState
+    // call (book flush timer and changeSymbol both update them atomically),
+    // so keying this memo on s.bids alone correctly invalidates on either.
+    const { bidRows, askRows, depthBidPath, depthAskPath } = this.memo('book', s.bids, () => {
+      const maxQty = Math.max(1, ...s.bids.map(b => b[1]), ...s.asks.map(a => a[1]));
+      const bidRows = s.bids.map(([p, q]) => ({ price: p.toFixed(sym.base > 1000 ? 1 : 5), qty: q.toFixed(4), depthPct: Math.min(100, (q / maxQty) * 100) }));
+      const askRows = [...s.asks].reverse().map(([p, q]) => ({ price: p.toFixed(sym.base > 1000 ? 1 : 5), qty: q.toFixed(4), depthPct: Math.min(100, (q / maxQty) * 100) }));
+
+      let depthBidPath = 'M0,220 L300,220 Z', depthAskPath = 'M0,220 L300,220 Z';
+      if (s.bids.length && s.asks.length) {
+        let cum = 0;
+        const bidPts = s.bids.map((b, i) => { cum += b[1]; return [150 - (i / s.bids.length) * 150, 220 - Math.min(200, cum * 4)]; });
+        cum = 0;
+        const askPts = s.asks.map((a, i) => { cum += a[1]; return [150 + (i / s.asks.length) * 150, 220 - Math.min(200, cum * 4)]; });
+        depthBidPath = `M0,220 L${bidPts.map(p => p.join(',')).join(' L')} L150,220 Z`;
+        depthAskPath = `M300,220 L${askPts.slice().reverse().map(p => p.join(',')).join(' L')} L150,220 Z`;
+      }
+      return { bidRows, askRows, depthBidPath, depthAskPath };
+    });
+
+    return {
+      wsDotColor: wsStatusColor, wsStatusColor, wsStatusText: wsTextMap[s.wsStatus] || 'OFFLINE',
+      wsOffline: s.wsStatus === 'offline', reconnectWS: () => this.manualReconnectWS(),
+      clockText: s.clockText, symbolChips, selectedLabel: sym.label,
+      hasSimulatedData, simulatedSymbolsText,
+      sentimentNeedleDeg, sentimentColor, sentimentLabel, sentimentScore: clamped,
+      sentimentAriaLabel: `Market sentiment: ${sentimentLabel}, composite score ${clamped} of 100`,
+      fngValue, fngLabel, fngColor, taAggLabel, taAggColor,
+      btcDomText: s.dominance.btc.toFixed(1), btcDomPct: Math.min(100, s.dominance.btc),
+      ethDomText: s.dominance.eth.toFixed(1), ethDomPct: Math.min(100, s.dominance.eth * 2),
+      chartRef: this.chartRef, heatmapRef: this.heatmapRef, calendarRef: this.calendarRef, newsRef: this.newsRef,
+      widgetErrors: s.widgetErrors,
+      retryChart: () => this.mountChart(), retryHeatmap: () => this.mountHeatmap(), retryCalendar: () => this.mountCalendar(), retryNews: () => this.mountNews(),
+      orderBookAvailable: isCrypto, orderBookUnavailable: !isCrypto,
+      spreadText: s.spread != null ? s.spread.toFixed(sym.base > 1000 ? 2 : 5) : '--',
+      midPriceText: s.mid != null ? s.mid.toFixed(sym.base > 1000 ? 1 : 5) : '--',
+      bidRows, askRows, depthBidPath, depthAskPath,
+      depthChartTitle: `Cumulative order book depth for ${sym.label}`,
+      indicatorRows, dataSourceLabel: s.dataSource === 'live' ? '● LIVE DATA' : '○ SIMULATED (feed unavailable)', dataSourceColor: s.dataSource === 'live' ? '#34d399' : '#7b8494',
+      mtfRows, alertRows, noAlerts: alertRows.length === 0, alertCountText: `${alertRows.length} SIGNALS`,
+      corrHeaders: s.correlation.headers, corrRows: s.correlation.rows, anomalyCountText: `${s.anomalies} ANOMALIES`,
+      heatmapTabFxStyle: `cursor:pointer;font-size:10px;font-weight:600;padding:3px 8px;border-radius:3px;color:${s.heatmapTab === 'fx' ? '#60a5fa' : '#7b8494'};background:${s.heatmapTab === 'fx' ? 'rgba(96,165,250,0.1)' : 'transparent'}`,
+      heatmapTabCryptoStyle: `cursor:pointer;font-size:10px;font-weight:600;padding:3px 8px;border-radius:3px;color:${s.heatmapTab === 'crypto' ? '#60a5fa' : '#7b8494'};background:${s.heatmapTab === 'crypto' ? 'rgba(96,165,250,0.1)' : 'transparent'}`,
+      setHeatmapTab_fx: () => this.setHeatmapTab('fx'), setHeatmapTab_crypto: () => this.setHeatmapTab('crypto'),
+    };
+  }
+}
+
+</script>
+</body>
+</html>
