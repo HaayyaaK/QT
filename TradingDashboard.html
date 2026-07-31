@@ -27,6 +27,16 @@
   *.tradingview.com wildcard below does not cover it) — confirmed live via
   "Please update your CSP rules to allow the tradingview-widget.com origin
   for frame-src" in the console.
+  query1.finance.yahoo.com is deliberately NOT in connect-src: the browser
+  no longer calls it directly (that call is CORS-blocked there, see README)
+  — FX klines now go through the local proxy at PROXY_BASE_URL, which calls
+  Yahoo/TwelveData/Alpha Vantage server-side where CORS doesn't apply.
+  http://127.0.0.1:8787 / http://localhost:8787 are the proxy's default
+  address (proxy lives at C:\proxy-server, a separate project — see its
+  README.md there, not a path under this repo); if you run it on a different port,
+  update both PROXY_BASE_URL below and this connect-src list.
+  api.kraken.com and api.exchange.coinbase.com are crypto klines fallbacks
+  (both free/keyless/CORS-open, tried after Binance, before simulated data).
 -->
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'none';
@@ -36,7 +46,7 @@
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src 'self' https://fonts.gstatic.com;
   img-src 'self' data: https://s3.tradingview.com https://www.tradingview.com https://*.tradingview.com https://*.tradingview-widget.com;
-  connect-src 'self' https://api.binance.com wss://stream.binance.com:9443 https://api.coingecko.com https://api.alternative.me https://query1.finance.yahoo.com;
+  connect-src 'self' https://api.binance.com wss://stream.binance.com:9443 https://api.kraken.com https://api.exchange.coinbase.com https://api.coingecko.com https://api.alternative.me http://127.0.0.1:8787 http://localhost:8787;
   frame-src https://s3.tradingview.com https://www.tradingview.com https://*.tradingview.com https://tradingview-widget.com https://*.tradingview-widget.com;
 ">
 <script src="./support.js"></script>
@@ -255,17 +265,20 @@
         never resolved"). This gives screen readers the same row/column
         header semantics without depending on that path.
       -->
-      <div style="overflow-x:auto">
+      <!-- Fixed height + both-axis scroll + sticky headers so this card matches
+           the 340px SECTOR HEATMAP card beside it instead of growing to fit
+           all 10 rows, while keeping row/column labels visible while scrolling. -->
+      <div style="overflow:auto;max-height:340px">
         <div role="table" aria-label="Pearson correlation matrix of 1-hour returns across tracked symbols" style="display:inline-block;min-width:100%">
-          <div role="row" style="display:flex">
-            <div role="columnheader" aria-label="Symbol" style="width:64px;flex-shrink:0"></div>
+          <div role="row" style="display:flex;position:sticky;top:0;z-index:2">
+            <div role="columnheader" aria-label="Symbol" style="width:64px;flex-shrink:0;background:#12161d;position:sticky;left:0;z-index:3"></div>
             <sc-for list="{{ corrHeaders }}" as="h" hint-placeholder-count="10">
-              <div role="columnheader" style="width:56px;flex-shrink:0;text-align:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:#7b8494;padding:2px">{{ h }}</div>
+              <div role="columnheader" style="width:56px;flex-shrink:0;text-align:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:#7b8494;padding:2px;background:#12161d">{{ h }}</div>
             </sc-for>
           </div>
           <sc-for list="{{ corrRows }}" as="row" hint-placeholder-count="10">
             <div role="row" style="display:flex">
-              <div role="rowheader" style="width:64px;flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:#7b8494;display:flex;align-items:center;padding:2px">{{ row.label }}</div>
+              <div role="rowheader" style="width:64px;flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:#7b8494;display:flex;align-items:center;padding:2px;background:#12161d;position:sticky;left:0;z-index:1">{{ row.label }}</div>
               <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="10">
                 <div role="cell" title="{{ cell.title }}" style="width:56px;height:30px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:#0a0d12;font-weight:600;background:{{ cell.color }};border:{{ cell.border }}">{{ cell.rLabel }}</div>
               </sc-for>
@@ -323,6 +336,49 @@
     </div>
   </div>
 
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-top:16px">
+    <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
+      <h2 style="margin:0 0 10px;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">MACRO SNAPSHOT <span style="color:#4a5568">(FRED, via local proxy)</span></h2>
+      <sc-if value="{{ macroAvailable }}">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px">
+          <sc-for list="{{ macroTiles }}" as="m" hint-placeholder-count="4">
+            <div style="background:#0d1015;border:1px solid #1c2330;border-radius:4px;padding:10px 12px">
+              <div style="font-size:10px;color:#7b8494;letter-spacing:0.3px">{{ m.label }}</div>
+              <div style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;color:#eef1f5;margin-top:4px">{{ m.valueText }}</div>
+              <div style="font-size:10px;color:#4a5568;margin-top:2px">{{ m.dateText }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+      <sc-if value="{{ macroUnavailable }}">
+        <div style="height:120px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;text-align:center;padding:0 20px">
+          <div style="color:#7b8494;font-size:12px">{{ macroUnavailableText }}</div>
+          <button onClick="{{ retryMacro }}" style="cursor:pointer;font-family:inherit;padding:6px 14px;border:1px solid #2a3342;border-radius:4px;font-size:12px;color:#60a5fa">Retry</button>
+        </div>
+      </sc-if>
+    </div>
+
+    <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
+      <h2 style="margin:0 0 10px;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">MARKET NEWS <span style="color:#4a5568">(NewsAPI, via local proxy)</span></h2>
+      <sc-if value="{{ newsApiAvailable }}">
+        <div style="max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:8px">
+          <sc-for list="{{ newsApiRows }}" as="n" hint-placeholder-count="6">
+            <a href="{{ n.url }}" target="_blank" rel="noopener noreferrer" style="display:block;padding:8px 10px;background:#0d1015;border-radius:4px;color:inherit">
+              <div style="font-size:12.5px;color:#c7ccd6;line-height:1.4">{{ n.title }}</div>
+              <div style="font-size:10px;color:#4a5568;margin-top:4px">{{ n.source }} · {{ n.timeText }}</div>
+            </a>
+          </sc-for>
+        </div>
+      </sc-if>
+      <sc-if value="{{ newsApiUnavailable }}">
+        <div style="height:120px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;text-align:center;padding:0 20px">
+          <div style="color:#7b8494;font-size:12px">{{ newsApiUnavailableText }}</div>
+          <button onClick="{{ retryNewsApi }}" style="cursor:pointer;font-family:inherit;padding:6px 14px;border:1px solid #2a3342;border-radius:4px;font-size:12px;color:#60a5fa">Retry</button>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+
   </main>
 
 </div>
@@ -358,6 +414,14 @@ class Component extends DCLogic {
     this.pendingBook = null;
     this.wsFailCount = 0;
     this.MAX_WS_RECONNECT_ATTEMPTS = 6;
+    // Local API proxy (separate project at C:\proxy-server, see its
+    // README.md — not part of this repo) — holds the keyed FX
+    // fallback sources (TwelveData, Alpha Vantage) and proxies Yahoo
+    // Finance server-side to sidestep its browser CORS block. Override with
+    // ?proxy=http://host:port in the URL if you're not running it on the
+    // default port, or if it's on a different machine on your network.
+    this.proxyBaseUrl = new URL(location.href).searchParams.get('proxy') || 'http://127.0.0.1:8787';
+    this.proxyUnavailableLogged = false;
     this.state = {
       symbol: 'BTCUSDT',
       clockText: '--:--:--',
@@ -373,6 +437,8 @@ class Component extends DCLogic {
       widgetErrors: { chart: false, heatmap: false, calendar: false, news: false },
       heatmapTab: 'fx',
       dataSource: 'sim',
+      macro: null, macroError: null,
+      newsApi: null, newsApiError: null,
     };
   }
 
@@ -390,6 +456,10 @@ class Component extends DCLogic {
     this.mountHeatmap();
     this.mountCalendar();
     this.mountNews();
+    this.fetchMacroSnapshot();
+    this.macroTimer = setInterval(() => this.fetchMacroSnapshot(), 30 * 60000); // FRED series update at most daily
+    this.fetchNewsApi();
+    this.newsApiTimer = setInterval(() => this.fetchNewsApi(), 10 * 60000);
   }
 
   componentWillUnmount() {
@@ -398,6 +468,8 @@ class Component extends DCLogic {
     clearInterval(this.metricsTimer);
     clearInterval(this.klinesTimer);
     clearInterval(this.bookFlushTimer);
+    clearInterval(this.macroTimer);
+    clearInterval(this.newsApiTimer);
     clearTimeout(this.reconnectTimer);
     if (this.ws) { try { this.ws.close(); } catch (e) {} }
   }
@@ -435,6 +507,31 @@ class Component extends DCLogic {
     } catch (e) { /* keep last known / seeded estimate */ }
   }
 
+  // Both macro/news panels go through the proxy (FRED and NewsAPI both
+  // require a key), so both share the same "unavailable" failure mode: the
+  // proxy isn't running, or the relevant *_API_KEYS isn't set in its .env.
+  async fetchMacroSnapshot() {
+    try {
+      const r = await fetch(`${this.proxyBaseUrl}/api/fred/snapshot`);
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.error || `http ${r.status}`);
+      if (!this.unmounted) this.setState({ macro: body.snapshot, macroError: null });
+    } catch (e) {
+      if (!this.unmounted) this.setState({ macroError: e.message || 'proxy unreachable' });
+    }
+  }
+
+  async fetchNewsApi() {
+    try {
+      const r = await fetch(`${this.proxyBaseUrl}/api/news?pageSize=12`);
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.error || `http ${r.status}`);
+      if (!this.unmounted) this.setState({ newsApi: body.articles, newsApiError: null });
+    } catch (e) {
+      if (!this.unmounted) this.setState({ newsApiError: e.message || 'proxy unreachable' });
+    }
+  }
+
   async fetchBinanceKlines(symbol, interval, limit) {
     const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
     if (!r.ok) throw new Error('binance http ' + r.status);
@@ -446,38 +543,89 @@ class Component extends DCLogic {
     };
   }
 
-  // NOTE: query1.finance.yahoo.com does not send Access-Control-Allow-Origin
-  // for arbitrary browser origins, so this call is expected to fail with a
-  // CORS error in every unproxied deployment (confirmed against a live
-  // localhost origin — the browser blocks it before a response body is ever
-  // read). getKlinesForInterval() below catches that and falls back to
-  // taEngine.simulateKlines(), which is why all 8 FX/metal symbols normally
-  // run on synthetic data — surfaced to the user via the "SIMULATED DATA"
-  // banner and the dataSource chip, computed from this.cache[id].source.
-  // A real fix needs either a server-side proxy for this endpoint or a
-  // CORS-friendly paid FX data vendor — both are infrastructure decisions
-  // out of reach of this single static HTML file today.
-  async fetchYahoo(symbol, interval, range) {
-    const ySym = symbol === 'XAUUSD' ? 'XAUUSD=X' : `${symbol}=X`;
-    const r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${ySym}?interval=${interval}&range=${range}`);
-    if (!r.ok) throw new Error('yahoo http ' + r.status);
+  // Kraken quotes majors in USD rather than USDT — fine for TA purposes
+  // (RSI/MACD/etc. care about relative movement, not the exact quote
+  // currency). The response's data key varies by pair ("XXBTZUSD",
+  // "XETHZUSD", ...) so it's looked up dynamically rather than assumed.
+  async fetchKrakenKlines(symbolId, interval, limit) {
+    const pair = { BTCUSDT: 'XBTUSD', ETHUSDT: 'ETHUSD' }[symbolId];
+    if (!pair) throw new Error('kraken: no pair mapping for ' + symbolId);
+    const minutes = { '5m': 5, '15m': 15, '1h': 60, '4h': 240, '1d': 1440 }[interval] || 60;
+    const r = await fetch(`https://api.kraken.com/0/public/OHLC?pair=${pair}&interval=${minutes}`);
+    if (!r.ok) throw new Error('kraken http ' + r.status);
     const j = await r.json();
-    const res = j.chart.result[0];
-    const q = res.indicators.quote[0];
-    const closes = q.close.filter(v => v != null);
-    if (closes.length < 20) throw new Error('insufficient');
-    return { opens: q.open, highs: q.high, lows: q.low, closes: q.close, volumes: (q.volume || []).map(v => v || 1) };
+    if (j.error && j.error.length) throw new Error('kraken: ' + j.error.join(', '));
+    const dataKey = Object.keys(j.result || {}).find(k => k !== 'last');
+    const rows = (dataKey && j.result[dataKey]) || [];
+    if (rows.length < 20) throw new Error('kraken: insufficient data');
+    const trimmed = rows.slice(-limit);
+    return {
+      opens: trimmed.map(r => +r[1]), highs: trimmed.map(r => +r[2]), lows: trimmed.map(r => +r[3]),
+      closes: trimmed.map(r => +r[4]), volumes: trimmed.map(r => +r[6]),
+    };
+  }
+
+  // Coinbase Exchange candles: [time, low, high, open, close, volume],
+  // newest-first — note low/high precede open/close in the tuple order.
+  // No native 4h granularity; 6h (21600s) is the closest available and is
+  // only used as a last-resort fallback anyway.
+  async fetchCoinbaseKlines(symbolId, interval, limit) {
+    const product = { BTCUSDT: 'BTC-USD', ETHUSDT: 'ETH-USD' }[symbolId];
+    if (!product) throw new Error('coinbase: no product mapping for ' + symbolId);
+    const granularity = { '5m': 300, '15m': 900, '1h': 3600, '4h': 21600, '1d': 86400 }[interval] || 3600;
+    const r = await fetch(`https://api.exchange.coinbase.com/products/${product}/candles?granularity=${granularity}`);
+    if (!r.ok) throw new Error('coinbase http ' + r.status);
+    const rows = await r.json();
+    if (!Array.isArray(rows) || rows.length < 20) throw new Error('coinbase: insufficient data');
+    const chron = rows.slice().reverse().slice(-limit);
+    return {
+      opens: chron.map(r => +r[3]), highs: chron.map(r => +r[2]), lows: chron.map(r => +r[1]),
+      closes: chron.map(r => +r[4]), volumes: chron.map(r => +r[5]),
+    };
+  }
+
+  // FX/metals klines: delegates to the local proxy (C:\proxy-server, separate project),
+  // which tries Yahoo (free, keyless, proxied server-side to sidestep the
+  // browser CORS block confirmed against query1.finance.yahoo.com) ->
+  // TwelveData -> Alpha Vantage, returning the first success. If the proxy
+  // itself isn't running, this throws and getKlinesForInterval() below falls
+  // back to simulated data, same as before.
+  async fetchFxViaProxy(symbolId, interval, limit) {
+    const url = `${this.proxyBaseUrl}/api/fx/klines?symbol=${symbolId}&interval=${interval}&limit=${limit}`;
+    let r;
+    try {
+      r = await fetch(url);
+    } catch (e) {
+      if (!this.proxyUnavailableLogged) {
+        this.proxyUnavailableLogged = true;
+        console.warn(`[dashboard] proxy unreachable at ${this.proxyBaseUrl} — FX symbols will run on simulated data until it's running (see C:\\proxy-server\\README.md). Override with ?proxy=http://host:port.`);
+      }
+      throw e;
+    }
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(`proxy http ${r.status}: ${body.error || 'unknown'}`);
+    }
+    const data = await r.json();
+    if (!data.closes || data.closes.length < 20) throw new Error('proxy: insufficient data');
+    return data;
   }
 
   async getKlinesForInterval(sym, interval, limit) {
-    try {
-      if (sym.type === 'crypto') {
-        const data = await this.fetchBinanceKlines(sym.id, interval, limit);
-        return { ...data, source: 'live' };
+    if (sym.type === 'crypto') {
+      for (const attempt of [
+        () => this.fetchBinanceKlines(sym.id, interval, limit),
+        () => this.fetchKrakenKlines(sym.id, interval, limit),
+        () => this.fetchCoinbaseKlines(sym.id, interval, limit),
+      ]) {
+        try {
+          return { ...(await attempt()), source: 'live' };
+        } catch (e) { /* try the next crypto source */ }
       }
-      const yInterval = { '5m': '5m', '15m': '15m', '1h': '60m', '4h': '60m', '1d': '1d' }[interval] || '60m';
-      const range = interval === '1d' ? '6mo' : '5d';
-      const data = await this.fetchYahoo(sym.id, yInterval, range);
+      return { ...this.ta.simulateKlines(sym.id + interval, limit, sym.base), source: 'sim' };
+    }
+    try {
+      const data = await this.fetchFxViaProxy(sym.id, interval, limit);
       return { ...data, source: 'live' };
     } catch (e) {
       return { ...this.ta.simulateKlines(sym.id + interval, limit, sym.base), source: 'sim' };
@@ -774,6 +922,26 @@ class Component extends DCLogic {
 
     const alertRows = this.memo('alertRows', s.alerts, () => s.alerts.map(a => ({ ...a, timeText: new Date(a.ts).toISOString().substr(11, 8) })));
 
+    const macroTiles = this.memo('macroTiles', s.macro, () => (s.macro || []).map(m => ({
+      label: m.label,
+      valueText: m.value == null ? '—' : `${Number(m.value).toFixed(2)}${m.unit || ''}`,
+      dateText: m.date || 'no data',
+    })));
+    const macroAvailable = !!s.macro && !s.macroError;
+    const macroUnavailableText = s.macroError
+      ? (s.macroError.includes('not configured') ? 'FRED_API_KEYS not set in the proxy’s .env' : `Proxy error: ${s.macroError}`)
+      : 'Local proxy not running — see C:\\proxy-server\\README.md';
+
+    const newsApiRows = this.memo('newsApiRows', s.newsApi, () => (s.newsApi || []).map(n => {
+      const mins = Math.max(0, Math.round((Date.now() - new Date(n.publishedAt).getTime()) / 60000));
+      const timeText = mins < 60 ? `${mins}m ago` : mins < 1440 ? `${Math.round(mins / 60)}h ago` : `${Math.round(mins / 1440)}d ago`;
+      return { title: n.title, source: n.source, url: n.url, timeText };
+    }));
+    const newsApiAvailable = !!s.newsApi && !s.newsApiError;
+    const newsApiUnavailableText = s.newsApiError
+      ? (s.newsApiError.includes('not configured') ? 'NEWSAPI_API_KEYS not set in the proxy’s .env' : `Proxy error: ${s.newsApiError}`)
+      : 'Local proxy not running — see C:\\proxy-server\\README.md';
+
     const isCrypto = sym.type === 'crypto';
     // s.bids and s.asks are always replaced together in the same setState
     // call (book flush timer and changeSymbol both update them atomically),
@@ -819,6 +987,10 @@ class Component extends DCLogic {
       heatmapTabFxStyle: `cursor:pointer;font-size:10px;font-weight:600;padding:3px 8px;border-radius:3px;color:${s.heatmapTab === 'fx' ? '#60a5fa' : '#7b8494'};background:${s.heatmapTab === 'fx' ? 'rgba(96,165,250,0.1)' : 'transparent'}`,
       heatmapTabCryptoStyle: `cursor:pointer;font-size:10px;font-weight:600;padding:3px 8px;border-radius:3px;color:${s.heatmapTab === 'crypto' ? '#60a5fa' : '#7b8494'};background:${s.heatmapTab === 'crypto' ? 'rgba(96,165,250,0.1)' : 'transparent'}`,
       setHeatmapTab_fx: () => this.setHeatmapTab('fx'), setHeatmapTab_crypto: () => this.setHeatmapTab('crypto'),
+      macroTiles, macroAvailable, macroUnavailable: !macroAvailable, macroUnavailableText,
+      retryMacro: () => this.fetchMacroSnapshot(),
+      newsApiRows, newsApiAvailable, newsApiUnavailable: !newsApiAvailable, newsApiUnavailableText,
+      retryNewsApi: () => this.fetchNewsApi(),
     };
   }
 }
