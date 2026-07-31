@@ -265,22 +265,26 @@
         never resolved"). This gives screen readers the same row/column
         header semantics without depending on that path.
       -->
-      <!-- Fixed height + both-axis scroll + sticky headers so this card matches
-           the 340px SECTOR HEATMAP card beside it instead of growing to fit
-           all 10 rows, while keeping row/column labels visible while scrolling. -->
+      <!-- Fixed height + sticky headers so this card matches the 340px SECTOR
+           HEATMAP card beside it instead of growing to fit all 10 rows.
+           Data columns are flex:1 (not a fixed px width) so the grid fills
+           the card's full width edge-to-edge, same as the heatmap grid next
+           to it, instead of leaving dead space when the card is wider than
+           10 fixed-width columns. min-width on each column is what brings
+           back horizontal scroll on genuinely narrow viewports. -->
       <div style="overflow:auto;max-height:340px">
-        <div role="table" aria-label="Pearson correlation matrix of 1-hour returns across tracked symbols" style="display:inline-block;min-width:100%">
-          <div role="row" style="display:flex;position:sticky;top:0;z-index:2">
-            <div role="columnheader" aria-label="Symbol" style="width:64px;flex-shrink:0;background:#12161d;position:sticky;left:0;z-index:3"></div>
+        <div role="table" aria-label="Pearson correlation matrix of 1-hour returns across tracked symbols" style="width:100%;min-width:100%">
+          <div role="row" style="display:flex">
+            <div role="columnheader" aria-label="Symbol" style="width:64px;flex-shrink:0;background:#12161d;position:sticky;left:0;top:0;z-index:3"></div>
             <sc-for list="{{ corrHeaders }}" as="h" hint-placeholder-count="10">
-              <div role="columnheader" style="width:56px;flex-shrink:0;text-align:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:#7b8494;padding:2px;background:#12161d">{{ h }}</div>
+              <div role="columnheader" style="flex:1;min-width:44px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:#7b8494;padding:2px;background:#12161d;position:sticky;top:0;z-index:2">{{ h }}</div>
             </sc-for>
           </div>
           <sc-for list="{{ corrRows }}" as="row" hint-placeholder-count="10">
             <div role="row" style="display:flex">
               <div role="rowheader" style="width:64px;flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:#7b8494;display:flex;align-items:center;padding:2px;background:#12161d;position:sticky;left:0;z-index:1">{{ row.label }}</div>
               <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="10">
-                <div role="cell" title="{{ cell.title }}" style="width:56px;height:30px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:#0a0d12;font-weight:600;background:{{ cell.color }};border:{{ cell.border }}">{{ cell.rLabel }}</div>
+                <div role="cell" title="{{ cell.title }}" style="flex:1;min-width:44px;height:30px;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:#0a0d12;font-weight:600;background:{{ cell.color }};border:{{ cell.border }}">{{ cell.rLabel }}</div>
               </sc-for>
             </div>
           </sc-for>
