@@ -86,7 +86,7 @@ test('bollinger: bands are always ordered upper >= mid >= lower', () => {
   }
 });
 
-test('wilderSmooth: seeds with a plain average at `period`, then recurses with 1/period decay', () => {
+test('wilderSmooth: seeds with a plain average at `period`, then recurses with (v-prev)/period decay', () => {
   const arr = [1, 2, 3, 4, 5, 6, 7, 8];
   const period = 4;
   const out = ta.wilderSmooth(arr, period);
@@ -95,8 +95,24 @@ test('wilderSmooth: seeds with a plain average at `period`, then recurses with 1
   assert.equal(out[2], null);
   const seed = (1 + 2 + 3 + 4) / 4; // 2.5
   assert.equal(out[3], seed);
-  const next = seed - seed / period + arr[4]; // 2.5 - 0.625 + 5 = 6.875
+  const next = seed + (arr[4] - seed) / period; // 2.5 + (5-2.5)/4 = 3.125
   assert.equal(out[4], next);
+});
+
+test('wilderSmooth: weights sum to 1 — output never exceeds the input range, however many bars', () => {
+  // Regression guard for a real bug: an earlier version used
+  // `prev - prev/period + v` (missing /period on v), which doesn't
+  // normalize to a weighted average — each new value gets added at full
+  // weight on top of a barely-decayed prior sum, so it ratchets upward
+  // without bound. Surfaced as ADX reading 575 on real EUR/USD data (ADX
+  // is bounded 0-100 by definition). A bounded input must stay bounded.
+  const period = 14;
+  const arr = Array.from({ length: 200 }, (_, i) => 20 + 40 * Math.abs(Math.sin(i / 3))); // bounded [20,60]
+  const out = ta.wilderSmooth(arr, period);
+  for (const v of out) {
+    if (v == null) continue;
+    assert.ok(v <= 60 + 1e-9 && v >= 20 - 1e-9, `wilderSmooth output ${v} escaped the input's [20,60] range`);
+  }
 });
 
 test('atr: positive on a moving series, uses Wilder smoothing (not standard EMA)', () => {
@@ -124,6 +140,29 @@ test('adx: rises above 20 on a sustained clean trend', () => {
   assert.ok(last > 20, `expected ADX to show trend strength, got ${last}`);
 });
 
+test('adx: stays within [0,100] on a small-price choppy series (regression: read 575 on real EUR/USD data)', () => {
+  // Small absolute price (~1.15, like a real FX quote) with noisy, non-monotonic
+  // moves — this is what actually surfaced the wilderSmooth weighting bug;
+  // buildUptrend's clean monotonic series above didn't exercise it the same way.
+  let price = 1.15;
+  let seed = 42;
+  const rand = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed / 4294967295; };
+  const highs = [], lows = [], closes = [];
+  for (let i = 0; i < 200; i++) {
+    const drift = (rand() - 0.5) * price * 0.003;
+    const close = price + drift;
+    highs.push(Math.max(price, close) + rand() * price * 0.001);
+    lows.push(Math.min(price, close) - rand() * price * 0.001);
+    closes.push(close);
+    price = close;
+  }
+  const out = ta.adx(highs, lows, closes, 14);
+  for (const v of out) {
+    if (v == null) continue;
+    assert.ok(v >= 0 && v <= 100, `ADX must stay within [0,100], got ${v}`);
+  }
+});
+
 test('donchian: upper/lower track the rolling extremes', () => {
   const { highs, lows } = buildUptrend();
   const { upper, lower } = ta.donchian(highs, lows, 20);
@@ -145,11 +184,32 @@ test('pearson: returns null below the n<3 minimum and on zero variance', () => {
   assert.equal(ta.pearson([5, 5, 5], [1, 2, 3]), null); // zero variance in x
 });
 
+test('pearson: never returns NaN — drops non-finite pairs instead of poisoning the sums', () => {
+  // Regression guard: a real bar-data gap upstream (Yahoo returning null for
+  // a missing bar, previously passed through unfiltered) turned into NaN
+  // here and rendered as literal "NaN" text in the correlation matrix.
+  const x = [1, 2, NaN, 4, 5, 6, 7];
+  const y = [2, 4, 6, 8, 10, 12, 14];
+  const r = ta.pearson(x, y);
+  assert.ok(Number.isFinite(r), `expected a finite correlation, got ${r}`);
+  assert.ok(Math.abs(r - 1) < 1e-9, 'the 6 clean pairs are still perfectly correlated');
+});
+
+test('pearson: returns null (not NaN) when too few pairs remain after dropping non-finite ones', () => {
+  const r = ta.pearson([1, NaN, NaN, NaN], [1, 2, 3, 4]);
+  assert.equal(r, null);
+});
+
 test('pctChanges: one shorter than input, matches manual ratio', () => {
   const out = ta.pctChanges([100, 110, 99]);
   assert.equal(out.length, 2);
   assert.ok(Math.abs(out[0] - 0.10) < 1e-9);
   assert.ok(Math.abs(out[1] - (-0.1)) < 1e-9);
+});
+
+test('pctChanges: drops non-finite closes instead of producing NaN/Infinity', () => {
+  const out = ta.pctChanges([100, NaN, 110, null, 99]);
+  assert.ok(out.every((v) => Number.isFinite(v)), `expected all-finite output, got ${out}`);
 });
 
 test('last: skips trailing nulls and returns null for an all-null array', () => {

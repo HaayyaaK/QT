@@ -160,7 +160,7 @@
     </div>
 
     <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:4px 10px;margin-bottom:8px">
         <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">L2 ORDER BOOK</h2>
         <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#7b8494">spread {{ spreadText }}</div>
       </div>
@@ -203,7 +203,7 @@
 
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px">
     <div style="grid-column:span 2;background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
+      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:4px 10px;margin-bottom:10px">
         <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">INDICATOR SNAPSHOT · {{ selectedLabel }} (1H)</h2>
         <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{{ dataSourceColor }}">{{ dataSourceLabel }}</div>
       </div>
@@ -232,7 +232,7 @@
   </div>
 
   <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px;margin-bottom:16px">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
+    <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:4px 10px;margin-bottom:10px">
       <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">AUTOMATED ALERT STREAM</h2>
       <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#4a5568">{{ alertCountText }}</div>
     </div>
@@ -252,7 +252,7 @@
 
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px">
     <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
+      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:4px 10px;margin-bottom:10px">
         <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">CORRELATION MATRIX · PEARSON r (1H RETURNS)</h2>
         <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#fbbf24">{{ anomalyCountText }}</div>
       </div>
@@ -293,7 +293,7 @@
     </div>
 
     <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:4px 10px;margin-bottom:10px">
         <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">SECTOR HEATMAP</h2>
         <div style="display:flex;gap:4px">
           <button onClick="{{ setHeatmapTab_fx }}" style="{{ heatmapTabFxStyle }}">FX</button>
@@ -659,7 +659,10 @@ class Component extends DCLogic {
     this.symbols.forEach((s1, i) => {
       const cells = this.symbols.map((s2, j) => {
         const r = ta.pearson(returns[s1.id], returns[s2.id]);
-        const rv = r == null ? 0 : r;
+        // taEngine.pearson() is now hardened to never return NaN (see its
+        // source comment) — this guard is a second, cheap line of defense so
+        // a coding mistake here can never show literal "NaN" text in the UI.
+        const rv = (r == null || Number.isNaN(r)) ? 0 : r;
         let anomaly = false;
         if (i !== j) {
           const n = Math.min(returns[s1.id].length, returns[s2.id].length);

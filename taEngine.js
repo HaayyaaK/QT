@@ -96,7 +96,14 @@ export function wilderSmooth(arr, period) {
         out[i] = prev;
       }
     } else {
-      prev = prev - prev / period + v;
+      // prev*(1 - 1/period) + v/period — weights must sum to 1. Missing the
+      // /period on v here (i.e. `prev - prev/period + v`) adds each new raw
+      // value at full weight on top of a barely-decayed prior average, which
+      // doesn't converge — it ratchets upward every step. Caught via ADX
+      // reading 575 on real EUR/USD data (ADX is bounded 0-100 by
+      // definition, which made the divergence obvious; the same bug in
+      // atr() is quieter since ATR has no natural upper bound to expose it).
+      prev = prev + (v - prev) / period;
       out[i] = prev;
     }
   }
@@ -167,21 +174,35 @@ export function donchian(highs, lows, period = 20) {
   return { upper, lower };
 }
 
+// Paired-deletion: a non-finite x[i]/y[i] (should be impossible now that
+// every kline source is sanitized at the boundary, see proxy-server's
+// sanitizeOhlcv — but this is the correlation matrix's own last line of
+// defense against ever rendering literal "NaN" text in the UI) drops just
+// that one pair instead of poisoning every running sum for the rest of the
+// series the way plain addition of a NaN/Infinity would.
 export function pearson(x, y) {
   const n = Math.min(x.length, y.length);
   if (n < 3) return null;
-  let sx = 0, sy = 0, sxy = 0, sx2 = 0, sy2 = 0;
+  let sx = 0, sy = 0, sxy = 0, sx2 = 0, sy2 = 0, count = 0;
   for (let i = 0; i < n; i++) {
-    sx += x[i]; sy += y[i]; sxy += x[i] * y[i]; sx2 += x[i] * x[i]; sy2 += y[i] * y[i];
+    const xi = x[i], yi = y[i];
+    if (!Number.isFinite(xi) || !Number.isFinite(yi)) continue;
+    sx += xi; sy += yi; sxy += xi * yi; sx2 += xi * xi; sy2 += yi * yi; count++;
   }
-  const num = n * sxy - sx * sy;
-  const den = Math.sqrt((n * sx2 - sx * sx) * (n * sy2 - sy * sy));
-  return den === 0 ? null : num / den;
+  if (count < 3) return null;
+  const num = count * sxy - sx * sy;
+  const den = Math.sqrt((count * sx2 - sx * sx) * (count * sy2 - sy * sy));
+  if (den === 0 || !Number.isFinite(den)) return null;
+  const r = num / den;
+  return Number.isFinite(r) ? r : null;
 }
 
 export function pctChanges(closes) {
+  // Filters non-finite closes first rather than computing through them —
+  // same defense-in-depth reasoning as pearson() above.
+  const clean = closes.filter((v) => Number.isFinite(v));
   const out = [];
-  for (let i = 1; i < closes.length; i++) out.push((closes[i] - closes[i - 1]) / closes[i - 1]);
+  for (let i = 1; i < clean.length; i++) out.push((clean[i] - clean[i - 1]) / clean[i - 1]);
   return out;
 }
 
