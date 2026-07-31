@@ -111,6 +111,17 @@ project might publish or share.
   use; revisit with an edge cache if usage grows. (The keyed sources behind
   the proxy don't have this problem in the same way — see the proxy's own
   README for its rate-limiting notes.)
+- **VS Code shows ~80 CSS diagnostics on `TradingDashboard.html` by
+  default** ("identifier expected", "} expected", "Do not use empty
+  rulesets") on nearly every styled element. These are IDE-only false
+  positives: VS Code's built-in CSS language service validates the raw text
+  inside every `style="..."` attribute, but this file's styles are full of
+  `{{ expr }}` template placeholders (e.g. `style="background:{{ chip.style
+  }}"`) resolved at runtime by the dc-runtime compiler, not by the
+  browser's CSS parser — VS Code doesn't know that and chokes on the `{`
+  `}` characters. `.vscode/settings.json` in this repo sets
+  `"css.validate": false` to silence it (no real validation is lost — there
+  are no standalone `.css` files here).
 
 ## Content-Security-Policy
 
