@@ -72,16 +72,38 @@ see limitation below).
 ## Content-Security-Policy
 
 `TradingDashboard.html` sets a CSP meta tag scoped to the exact origins this
-app talks to. It includes `'unsafe-eval'` in `script-src` — that's required by
-`support.js`'s `evalDcLogic()`, which runs the `Component` class via
-`new Function(...)`; that's how the vendored template runtime works, not
-something this file can avoid without replacing the runtime. It also includes
-`'unsafe-inline'` in `style-src` because panel styling is authored as inline
-`style="..."` attributes throughout the template (extracting those to a
-stylesheet is tracked as deferred work below).
+app talks to. Notes on the less-obvious entries (each confirmed against a
+real Brave/Chromium console, not assumed):
+
+- `'unsafe-eval'` (script-src) — required by `support.js`'s `evalDcLogic()`,
+  which runs the `Component` class via `new Function(...)`; that's how the
+  vendored template runtime works, not something this file can avoid without
+  replacing the runtime.
+- `'unsafe-inline'` (script-src) — required because TradingView's widget
+  loader scripts (loaded from the allowlisted `s3.tradingview.com`)
+  dynamically inject their own inline bootstrap `<script>` tags with no
+  `src`; without this, all four TradingView widgets fail to render. Since
+  `'unsafe-eval'` already concedes arbitrary code execution for this app,
+  this doesn't meaningfully lower the bar further.
+- `'unsafe-inline'` (style-src) — panel styling is authored as inline
+  `style="..."` attributes throughout the template (extracting those to a
+  stylesheet is tracked as deferred work below).
+- `wss://stream.binance.com:9443` (connect-src) — the port must be listed
+  explicitly. A CSP source with no port only matches the scheme's *default*
+  port (443 for wss); Binance's public stream runs on 9443, a non-default
+  port, so omitting it silently blocks the WebSocket.
+- `tradingview-widget.com` / `*.tradingview-widget.com` (frame-src) —
+  TradingView serves the actual iframe content from this separate domain,
+  not a subdomain of `tradingview.com`, so the `*.tradingview.com` wildcard
+  does not cover it.
 
 If you add a new external script/API/embed, add its origin to the CSP or it
-will be silently blocked.
+will be silently blocked. **Test any CSP change in a real browser with
+DevTools open before treating it as done** — this project shipped an
+enforcing CSP once without that step and it broke every TradingView widget
+plus the live order book (wrong WS port, missing frame-src origin, missing
+`'unsafe-inline'` in script-src). Prefer rolling out a new/changed CSP as
+`Content-Security-Policy-Report-Only` first if you can.
 
 ## Testing
 
@@ -117,8 +139,18 @@ Critical/High/Medium findings:
   focus ring.
 - Added landmark elements (`<header>`/`<main>`), a page `<h1>`, heading-level
   panel titles, `aria-label`s on the sentiment gauge and depth-chart SVG, and
-  rebuilt the correlation matrix as a real `<table>` with row/column headers.
+  ARIA table roles (`role="table"/"row"/"columnheader"/"rowheader"/"cell"`)
+  on the correlation matrix grid.
 - Added this README, `package.json`, and a `taEngine.js` test suite.
+
+A follow-up pass (same day) fixed a first-try CSP that was shipped enforcing
+instead of report-only and broke, live: all four TradingView widgets (wrong
+`frame-src` origin), the WebSocket order book/depth chart (wrong `connect-src`
+port), and the correlation matrix (a `<table>` rewrite that didn't survive
+contact with the runtime — reverted to the div/ARIA-role version above). See
+the Content-Security-Policy section for the specifics. Also set the
+correlation-matrix and sector-heatmap cards to an even 50/50 split instead of
+the matrix spanning 2 columns.
 
 **Deferred to next phase (Low severity, not yet addressed):**
 

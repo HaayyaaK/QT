@@ -7,21 +7,37 @@
   'unsafe-eval' is required by support.js's evalDcLogic(), which runs the
   Component class below via `new Function(...)` — that's how the vendored
   dc-runtime template compiler works, not something this file controls.
+  'unsafe-inline' (script-src) is also required: TradingView's widget loader
+  scripts (loaded from the allowlisted s3.tradingview.com) dynamically inject
+  their own inline bootstrap <script> tags with no src, which a CSP without
+  'unsafe-inline' blocks outright (confirmed live — this broke all four
+  TradingView widgets). Since 'unsafe-eval' already concedes arbitrary
+  string-to-code execution for this app, 'unsafe-inline' does not meaningfully
+  lower the bar further; a nonce/hash strategy isn't practical for a static
+  file with no server-side templating.
   'unsafe-inline' (style-src) is required because panel styling is authored
   as inline style="" attributes throughout this template; removing it would
   need extracting every inline style to a stylesheet (tracked as deferred
   Low-priority work, see README).
+  Binance's public WS stream runs on a non-default port (:9443) — CSP source
+  matching without an explicit port only matches the scheme's default port,
+  so it must be listed explicitly or the connection is silently blocked.
+  TradingView serves its actual iframe content from the separate
+  tradingview-widget.com domain (not a subdomain of tradingview.com, so the
+  *.tradingview.com wildcard below does not cover it) — confirmed live via
+  "Please update your CSP rules to allow the tradingview-widget.com origin
+  for frame-src" in the console.
 -->
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'none';
   base-uri 'self';
   object-src 'none';
-  script-src 'self' 'unsafe-eval' https://unpkg.com https://s3.tradingview.com;
+  script-src 'self' 'unsafe-eval' 'unsafe-inline' https://unpkg.com https://s3.tradingview.com https://*.tradingview.com;
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src 'self' https://fonts.gstatic.com;
-  img-src 'self' data: https://s3.tradingview.com https://www.tradingview.com https://*.tradingview.com;
-  connect-src 'self' https://api.binance.com wss://stream.binance.com https://api.coingecko.com https://api.alternative.me https://query1.finance.yahoo.com;
-  frame-src https://s3.tradingview.com https://www.tradingview.com https://*.tradingview.com;
+  img-src 'self' data: https://s3.tradingview.com https://www.tradingview.com https://*.tradingview.com https://*.tradingview-widget.com;
+  connect-src 'self' https://api.binance.com wss://stream.binance.com:9443 https://api.coingecko.com https://api.alternative.me https://query1.finance.yahoo.com;
+  frame-src https://s3.tradingview.com https://www.tradingview.com https://*.tradingview.com https://tradingview-widget.com https://*.tradingview-widget.com;
 ">
 <script src="./support.js"></script>
 </head>
@@ -225,33 +241,37 @@
   </div>
 
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px">
-    <div style="grid-column:span 2;background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
+    <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
         <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">CORRELATION MATRIX · PEARSON r (1H RETURNS)</h2>
         <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#fbbf24">{{ anomalyCountText }}</div>
       </div>
+      <!--
+        ARIA table roles on plain divs rather than real <table>/<tr>/<td> —
+        the dc-runtime's real-table handling (it rewrites table-family tags
+        to sc-raw-* before parsing, see support.js RAW_WRAP) didn't resolve
+        the {{ }} bindings inside this grid live-tested (console: "{{ h }}
+        never resolved", "{{ row.label }} never resolved", "{{ cell.rLabel }}
+        never resolved"). This gives screen readers the same row/column
+        header semantics without depending on that path.
+      -->
       <div style="overflow-x:auto">
-        <table style="border-collapse:collapse;min-width:100%">
-          <caption style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap">Pearson correlation matrix of 1-hour returns across tracked symbols</caption>
-          <thead>
-            <tr>
-              <th scope="col" style="width:64px;flex-shrink:0"><span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Symbol</span></th>
-              <sc-for list="{{ corrHeaders }}" as="h" hint-placeholder-count="10">
-                <th scope="col" style="width:56px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;color:#7b8494;padding:2px">{{ h }}</th>
-              </sc-for>
-            </tr>
-          </thead>
-          <tbody>
-            <sc-for list="{{ corrRows }}" as="row" hint-placeholder-count="10">
-              <tr>
-                <th scope="row" style="width:64px;text-align:left;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;color:#7b8494;padding:2px">{{ row.label }}</th>
-                <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="10">
-                  <td title="{{ cell.title }}" style="width:56px;height:30px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:#0a0d12;font-weight:600;background:{{ cell.color }};border:{{ cell.border }}">{{ cell.rLabel }}</td>
-                </sc-for>
-              </tr>
+        <div role="table" aria-label="Pearson correlation matrix of 1-hour returns across tracked symbols" style="display:inline-block;min-width:100%">
+          <div role="row" style="display:flex">
+            <div role="columnheader" aria-label="Symbol" style="width:64px;flex-shrink:0"></div>
+            <sc-for list="{{ corrHeaders }}" as="h" hint-placeholder-count="10">
+              <div role="columnheader" style="width:56px;flex-shrink:0;text-align:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:#7b8494;padding:2px">{{ h }}</div>
             </sc-for>
-          </tbody>
-        </table>
+          </div>
+          <sc-for list="{{ corrRows }}" as="row" hint-placeholder-count="10">
+            <div role="row" style="display:flex">
+              <div role="rowheader" style="width:64px;flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:#7b8494;display:flex;align-items:center;padding:2px">{{ row.label }}</div>
+              <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="10">
+                <div role="cell" title="{{ cell.title }}" style="width:56px;height:30px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:#0a0d12;font-weight:600;background:{{ cell.color }};border:{{ cell.border }}">{{ cell.rLabel }}</div>
+              </sc-for>
+            </div>
+          </sc-for>
+        </div>
       </div>
     </div>
 
