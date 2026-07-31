@@ -421,10 +421,18 @@ class Component extends DCLogic {
     // Local API proxy (separate project at C:\proxy-server, see its
     // README.md — not part of this repo) — holds the keyed FX
     // fallback sources (TwelveData, Alpha Vantage) and proxies Yahoo
-    // Finance server-side to sidestep its browser CORS block. Override with
-    // ?proxy=http://host:port in the URL if you're not running it on the
-    // default port, or if it's on a different machine on your network.
-    this.proxyBaseUrl = new URL(location.href).searchParams.get('proxy') || 'http://127.0.0.1:8787';
+    // Finance server-side to sidestep its browser CORS block.
+    // Dev (Live Server on localhost/127.0.0.1): the proxy has no site in
+    // front of it, so it's called directly on its own port.
+    // Production (served from forex.hayyaak.com / trade.hayyaak.com /
+    // hayyaak.trade via IIS): same-origin relative path — web.config's ARR
+    // rule reverse-proxies /api/* to the local proxy process over
+    // loopback-only (server.js binds 127.0.0.1, never exposed directly),
+    // so the browser never needs a different origin, and the existing CSP
+    // 'self' in connect-src already covers it with no further change.
+    // ?proxy=http://host:port always overrides both, for anything unusual.
+    const isLocalDev = ['localhost', '127.0.0.1'].includes(location.hostname);
+    this.proxyBaseUrl = new URL(location.href).searchParams.get('proxy') || (isLocalDev ? 'http://127.0.0.1:8787' : '');
     this.proxyUnavailableLogged = false;
     this.state = {
       symbol: 'BTCUSDT',
@@ -602,7 +610,8 @@ class Component extends DCLogic {
     } catch (e) {
       if (!this.proxyUnavailableLogged) {
         this.proxyUnavailableLogged = true;
-        console.warn(`[dashboard] proxy unreachable at ${this.proxyBaseUrl} — FX symbols will run on simulated data until it's running (see C:\\proxy-server\\README.md). Override with ?proxy=http://host:port.`);
+        const where = this.proxyBaseUrl || `${location.origin} (same-origin /api, expects an IIS ARR reverse-proxy rule — see web.config)`;
+        console.warn(`[dashboard] proxy unreachable at ${where} — FX symbols will run on simulated data until it's running (see C:\\proxy-server\\README.md). Override with ?proxy=http://host:port.`);
       }
       throw e;
     }
