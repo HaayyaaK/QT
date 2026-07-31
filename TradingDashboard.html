@@ -393,8 +393,15 @@ class Component extends DCLogic {
   constructor(props) {
     super(props);
     this.symbols = [
-      { id: 'BTCUSDT', label: 'BTC/USD', type: 'crypto', tv: 'BINANCE:BTCUSDT', base: 65000 },
-      { id: 'ETHUSDT', label: 'ETH/USD', type: 'crypto', tv: 'BINANCE:ETHUSDT', base: 3200 },
+      // BTCUSD/ETHUSD, not BTCUSDT/ETHUSDT — Binance genuinely lists these
+      // as real USD-quoted spot pairs (confirmed live: quoteAsset "USD",
+      // status "TRADING", real klines/ticker data), not an approximation
+      // via the USDT stablecoin. Liquidity is far thinner than the USDT
+      // pairs (~$200K/24h quote volume vs. billions), so expect a wider
+      // L2 spread and choppier price action — that's real market
+      // structure, not a bug.
+      { id: 'BTCUSD', label: 'BTC/USD', type: 'crypto', tv: 'BINANCE:BTCUSD', base: 65000 },
+      { id: 'ETHUSD', label: 'ETH/USD', type: 'crypto', tv: 'BINANCE:ETHUSD', base: 3200 },
       { id: 'EURUSD', label: 'EUR/USD', type: 'fx', tv: 'FX:EURUSD', base: 1.08 },
       { id: 'GBPUSD', label: 'GBP/USD', type: 'fx', tv: 'FX:GBPUSD', base: 1.27 },
       { id: 'USDJPY', label: 'USD/JPY', type: 'fx', tv: 'FX:USDJPY', base: 155 },
@@ -435,7 +442,7 @@ class Component extends DCLogic {
     this.proxyBaseUrl = new URL(location.href).searchParams.get('proxy') || (isLocalDev ? 'http://127.0.0.1:8787' : '');
     this.proxyUnavailableLogged = false;
     this.state = {
-      symbol: 'BTCUSDT',
+      symbol: 'BTCUSD',
       clockText: '--:--:--',
       wsStatus: 'connecting',
       bids: [], asks: [], mid: null, spread: null,
@@ -555,12 +562,12 @@ class Component extends DCLogic {
     };
   }
 
-  // Kraken quotes majors in USD rather than USDT — fine for TA purposes
-  // (RSI/MACD/etc. care about relative movement, not the exact quote
-  // currency). The response's data key varies by pair ("XXBTZUSD",
-  // "XETHZUSD", ...) so it's looked up dynamically rather than assumed.
+  // Kraken's pair codes don't match our BTCUSD/ETHUSD ids directly (BTC is
+  // "XBT" in Kraken's naming) — mapped explicitly below. The response's
+  // data key varies by pair too ("XXBTZUSD", "XETHZUSD", ...), so it's
+  // looked up dynamically rather than assumed.
   async fetchKrakenKlines(symbolId, interval, limit) {
-    const pair = { BTCUSDT: 'XBTUSD', ETHUSDT: 'ETHUSD' }[symbolId];
+    const pair = { BTCUSD: 'XBTUSD', ETHUSD: 'ETHUSD' }[symbolId];
     if (!pair) throw new Error('kraken: no pair mapping for ' + symbolId);
     const minutes = { '5m': 5, '15m': 15, '1h': 60, '4h': 240, '1d': 1440 }[interval] || 60;
     const r = await fetch(`https://api.kraken.com/0/public/OHLC?pair=${pair}&interval=${minutes}`);
@@ -582,7 +589,7 @@ class Component extends DCLogic {
   // No native 4h granularity; 6h (21600s) is the closest available and is
   // only used as a last-resort fallback anyway.
   async fetchCoinbaseKlines(symbolId, interval, limit) {
-    const product = { BTCUSDT: 'BTC-USD', ETHUSDT: 'ETH-USD' }[symbolId];
+    const product = { BTCUSD: 'BTC-USD', ETHUSD: 'ETH-USD' }[symbolId];
     if (!product) throw new Error('coinbase: no product mapping for ' + symbolId);
     const granularity = { '5m': 300, '15m': 900, '1h': 3600, '4h': 21600, '1d': 86400 }[interval] || 3600;
     const r = await fetch(`https://api.exchange.coinbase.com/products/${product}/candles?granularity=${granularity}`);
