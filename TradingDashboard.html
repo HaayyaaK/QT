@@ -442,6 +442,17 @@ class Component extends DCLogic {
     this.bookReconnectTimer = null;
     this.cryptoHealthTimer = null;
     this.MAX_PROVIDER_BOOK_FAILURES = 3; // consecutive failures before failing over to the next exchange
+    this.lastCryptoSwitchAt = 0;
+    // Cooldown before checkCryptoRecovery is allowed to act again after any
+    // switch (either direction). Recovery only checks REST klines, which can
+    // come back healthy well before a provider's WebSocket book has actually
+    // stabilized — without this, a just-recovered provider whose WS is still
+    // flaky gets immediately re-failed-over, and since recovery keeps seeing
+    // healthy REST, the two directions can flap against each other with no
+    // cooldown in between. This only gates the backward/opportunistic
+    // recovery direction, not the forward failoverCryptoProvider path — that
+    // one is reacting to a real live failure and should stay immediate.
+    this.CRYPTO_RECOVERY_COOLDOWN_MS = 45000;
     this.unmounted = false;
     this.pendingBook = null;
     // Local API proxy (separate project at C:\proxy-server, see its
@@ -627,9 +638,19 @@ class Component extends DCLogic {
   // mounted regardless of subsequent failover/recovery.
   switchCryptoProvider(newId, reason) {
     if (newId === this.cryptoActiveId) return;
+    // Cooldown applies to *any* path that tries to move back toward a
+    // higher-priority provider (checkCryptoRecovery's health-check, and
+    // getCryptoKlines()'s own attemptWithFailover walk switching back when a
+    // higher-priority provider's REST klines happen to succeed) — not just
+    // the explicit recovery check. Forward moves (newIdx > current, a real
+    // live failure) are never gated here.
+    const currentIdx = this.cryptoProviders.findIndex(p => p.id === this.cryptoActiveId);
+    const newIdx = this.cryptoProviders.findIndex(p => p.id === newId);
+    if (newIdx < currentIdx && Date.now() - this.lastCryptoSwitchAt < this.CRYPTO_RECOVERY_COOLDOWN_MS) return;
     const oldProvider = this.providerById(this.cryptoActiveId);
     const newProvider = this.providerById(newId);
     this.cryptoActiveId = newId;
+    this.lastCryptoSwitchAt = Date.now();
     this.logProvider('INFO', `Switching from ${oldProvider ? oldProvider.label : this.cryptoActiveId} to ${newProvider.label} (${reason})`);
     const sel = this.symMeta(this.state.symbol);
     if (sel && sel.type === 'crypto') {
@@ -663,6 +684,7 @@ class Component extends DCLogic {
     if (this.unmounted || !this.cryptoProviders) return;
     const activeIdx = this.cryptoProviders.findIndex(p => p.id === this.cryptoActiveId);
     if (activeIdx <= 0) return; // already on the top provider, nothing to recover to
+    if (Date.now() - this.lastCryptoSwitchAt < this.CRYPTO_RECOVERY_COOLDOWN_MS) return; // just switched, give the WS time to prove itself before probing further
     for (let i = 0; i < activeIdx; i++) {
       const candidate = this.cryptoProviders[i];
       try {

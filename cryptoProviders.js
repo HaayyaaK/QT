@@ -86,11 +86,81 @@ export function topLevels(map, side, n = 10) {
   return entries.slice(0, n);
 }
 
+// CRC-32 (zlib/ISO-HDLC polynomial) — Kraken's v2 book checksum algorithm.
+// Exported for direct unit testing.
+export function crc32(str) {
+  let crc = ~0;
+  for (let i = 0; i < str.length; i++) {
+    crc ^= str.charCodeAt(i);
+    for (let j = 0; j < 8; j++) crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+  }
+  return (~crc) >>> 0;
+}
+
+// Per Kraken's checksum spec: format each price/qty to the pair's fixed
+// decimal precision, strip the decimal point, then strip leading zeros
+// (trailing zeros stay — they're significant digits, not display noise).
+// toFixed(decimals) is safe here even though JSON parsing already turned
+// the wire value into a float: as long as `decimals` matches the pair's
+// real precision, re-padding reconstructs the exact original digit string.
+function krakenChecksumPart(n, decimals) {
+  const s = n.toFixed(decimals).replace('.', '').replace(/^0+/, '');
+  return s === '' ? '0' : s;
+}
+
+// Book-precision per pair, calibrated against Kraken's live feed (not
+// documented anywhere obvious — verified by comparing candidate checksums
+// against real `checksum` values across dozens of live messages until one
+// combination matched consistently). Keyed by the wsSymbol used in the
+// `book` subscription (bookSymbol from the registry below).
+const KRAKEN_BOOK_PRECISION = {
+  'BTC/USD': { priceDec: 1, qtyDec: 8 },
+  'ETH/USD': { priceDec: 2, qtyDec: 8 },
+};
+
+// Exported for direct unit testing. bids/asks are [price, qty] pair arrays
+// as returned by topLevels (already sorted/sliced to top-10 by the caller).
+export function krakenBookChecksum(asks, bids, priceDec, qtyDec) {
+  const part = (level) => krakenChecksumPart(level[0], priceDec) + krakenChecksumPart(level[1], qtyDec);
+  return crc32(asks.map(part).join('') + bids.map(part).join(''));
+}
+
 function krakenConnectBook(wsSymbol, { onBook, onStatus }) {
   let ws = null, closed = false;
   let bidMap = new Map(), askMap = new Map(); // price -> qty, maintained locally
+  const precision = KRAKEN_BOOK_PRECISION[wsSymbol];
   function emit() {
     onBook(topLevels(bidMap, 'bids'), topLevels(askMap, 'asks'));
+  }
+  // Verifies our locally-maintained book against Kraken's own checksum of
+  // the same top-10x2 levels. This exists because the delta-merge above has
+  // no way to notice a *missed* update on its own — a single dropped message
+  // (a network hiccup, a backgrounded tab throttling timers, anything) would
+  // otherwise leave bidMap/askMap silently wrong forever, with symptoms like
+  // a crossed book (best bid > best ask) turning up later with no direct
+  // link back to the cause. A checksum mismatch means "our state is
+  // provably wrong, not just possibly stale" — so on mismatch we close the
+  // real WebSocket outright (not the wrapper's close(), which suppresses
+  // onStatus) so the *existing* onclose -> onStatus('closed') failure path
+  // reconnects and gets a fresh snapshot, the same recovery Kraken's own
+  // protocol expects. Reusing that path (rather than a silent resubscribe)
+  // also means a persistently bad checksum still counts toward
+  // MAX_PROVIDER_BOOK_FAILURES and eventually fails over, instead of looping
+  // forever on Kraken if this calibration were ever wrong for some pair.
+  function verifyChecksum(received) {
+    if (!precision || received == null) return;
+    const asks = topLevels(askMap, 'asks', 10), bids = topLevels(bidMap, 'bids', 10);
+    if (asks.length < 10 || bids.length < 10) return; // checksum spec assumes full depth
+    const computed = krakenBookChecksum(asks, bids, precision.priceDec, precision.qtyDec);
+    if (computed !== received) {
+      const bestAsk = asks[0][0], bestBid = bids[0][0];
+      console.warn(
+        `[WARN] Kraken book checksum mismatch on ${wsSymbol} at ${new Date().toISOString()}: ` +
+        `computed=${computed} received=${received}, spread=${(bestAsk - bestBid).toFixed(precision.priceDec)} ` +
+        `(best bid ${bestBid}, best ask ${bestAsk}) — forcing reconnect for a fresh snapshot`
+      );
+      if (ws) { try { ws.close(); } catch {} }
+    }
   }
   function open() {
     if (closed) return;
@@ -109,10 +179,12 @@ function krakenConnectBook(wsSymbol, { onBook, onStatus }) {
         bidMap = new Map((d.bids || []).map((l) => [l.price, l.qty]));
         askMap = new Map((d.asks || []).map((l) => [l.price, l.qty]));
         emit();
+        verifyChecksum(d.checksum);
       } else if (msg.type === 'update') {
         applyKrakenLevels(bidMap, d.bids);
         applyKrakenLevels(askMap, d.asks);
         emit();
+        verifyChecksum(d.checksum);
       }
     };
     ws.onerror = () => {};

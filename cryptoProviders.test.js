@@ -6,7 +6,7 @@
 // environment the real fetchKlines/connectBook implementations need.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROVIDERS, providerById, attemptWithFailover, applyKrakenLevels, topLevels } from './cryptoProviders.js';
+import { PROVIDERS, providerById, attemptWithFailover, applyKrakenLevels, topLevels, crc32, krakenBookChecksum } from './cryptoProviders.js';
 
 test('PROVIDERS: priority order is Kraken -> Bitstamp -> Gemini -> Binance', () => {
   assert.deepEqual(PROVIDERS.map((p) => p.id), ['kraken', 'bitstamp', 'gemini', 'binance']);
@@ -144,4 +144,53 @@ test('topLevels: slices to n', () => {
   const map = new Map(Array.from({ length: 20 }, (_, i) => [i, 1]));
   assert.equal(topLevels(map, 'bids', 5).length, 5);
   assert.equal(topLevels(map, 'bids').length, 10); // default n
+});
+
+// crc32 / krakenBookChecksum: regression coverage for the checksum-mismatch
+// detector added after a real bug — a genuinely crossed book (best bid >
+// best ask) turned up during live testing on a *single, never-interrupted*
+// Kraken connection, meaning a delta had silently been missed with nothing
+// noticing. Kraken's v2 book channel ships a CRC-32 checksum of the top-10
+// bids/asks specifically so a client can detect this. The (priceDec=1,
+// qtyDec=8, asks-then-bids) formatting below isn't documented anywhere
+// obvious — it's calibrated against dozens of live messages until computed
+// checksums matched Kraken's real ones consistently (see git history for
+// the calibration approach if this ever needs re-deriving for a new pair).
+
+test('crc32: matches a known reference vector ("123456789" -> 0xCBF43926)', () => {
+  // Standard CRC-32/ISO-HDLC check value, independent of anything
+  // Kraken-specific — confirms the polynomial/algorithm itself is right
+  // before trusting it against live exchange data.
+  assert.equal(crc32('123456789'), 0xCBF43926);
+});
+
+test('krakenBookChecksum: matches Kraken\'s real checksum on a captured live BTC/USD snapshot', () => {
+  // Real top-10 bids/asks + the checksum Kraken sent alongside them,
+  // captured live (see cryptoProviders.js's KRAKEN_BOOK_PRECISION comment).
+  // This is the actual regression: if the formatting (decimal places,
+  // leading-zero stripping, ask/bid order) ever drifts from what Kraken
+  // expects, this stops matching and every real update would too — exactly
+  // the silent-drift failure mode this feature exists to catch.
+  const asks = [
+    [63000.1, 0.00008407], [63002.2, 0.01574689], [63003.1, 0.507708],
+    [63003.2, 0.000051], [63006.4, 0.00020955], [63006.5, 0.79356904],
+    [63007, 0.23809305], [63007.4, 0.23809305], [63007.9, 0.79355129],
+    [63009.5, 0.000051],
+  ];
+  const bids = [
+    [63000, 0.87144559], [62999.8, 0.46878245], [62999.7, 0.79365356],
+    [62999.1, 0.01580823], [62998.1, 0.00015856], [62998, 0.79367521],
+    [62997, 0.097], [62995.5, 0.51241195], [62995.2, 0.06196363],
+    [62994.2, 0.26691475],
+  ];
+  assert.equal(krakenBookChecksum(asks, bids, 1, 8), 838552268);
+});
+
+test('krakenBookChecksum: a single wrong level (the exact failure mode being detected) changes the checksum', () => {
+  const asks = [[100.0, 1], [100.1, 1], [100.2, 1], [100.3, 1], [100.4, 1], [100.5, 1], [100.6, 1], [100.7, 1], [100.8, 1], [100.9, 1]];
+  const bids = [[99.9, 1], [99.8, 1], [99.7, 1], [99.6, 1], [99.5, 1], [99.4, 1], [99.3, 1], [99.2, 1], [99.1, 1], [99.0, 1]];
+  const correct = krakenBookChecksum(asks, bids, 1, 8);
+  const staleLevel = [[99.9, 2], ...bids.slice(1)]; // one missed delta: qty should have updated but didn't
+  const withDrift = krakenBookChecksum(asks, staleLevel, 1, 8);
+  assert.notEqual(correct, withDrift);
 });

@@ -155,7 +155,16 @@
     runtime.markFetched(rootName);
     runtime.setRootName(rootName);
     runtime.adoptParsed(rootName, parsed);
-    if (!window.__resources) {
+    // Only relevant when a host editor is actually attached (same condition
+    // notifyHost() below uses) — the raw template text this fetches back is
+    // for the editor's node-mapping bridge (__dcAnnotatedTemplate /
+    // __dcTemplateSource), which nothing reads in a standalone page load.
+    // Running it unconditionally caused a real bug: it races the initial
+    // mount, and runtime.updateHtml() ends up remounting the just-mounted
+    // React tree a second time — e.g. TradingDashboard.html's Component saw
+    // componentDidMount fire twice on every load, opening two live
+    // WebSocket connections before the first was torn down.
+    if (!window.__resources && window.parent !== window) {
       fetch(location.href).then((res) => res.ok ? res.text() : "").then((t) => {
         const raw = t ? parseDcText(t) : null;
         if (raw?.template) runtime.updateHtml(rootName, raw.template);
