@@ -103,16 +103,13 @@ one exchange is ever trusted at a time.
 - **TradingView chart follows `ACTIVE_PROVIDER`** too (`tvSymbolFor()` —
   `KRAKEN:BTCUSD` / `BITSTAMP:BTCUSD` / `GEMINI:BTCUSD` / `BINANCE:BTCUSD`),
   remounting on every provider switch, shown in the "ADVANCED CHART" panel
-  header. **Caveat:** TradingView's symbol-search API blocks automated/curl
-  verification (bot protection, 403s even with browser headers), so unlike
-  every other exchange integration in this project, these three symbol
-  strings were not independently confirmed to exist via a live API check —
-  they follow the same naming convention as the already-working
-  `BINANCE:BTCUSD`, and Kraken/Bitstamp/Gemini are all long-established,
-  major exchanges TradingView is very likely to list. If any of the three
-  turns out wrong, the existing chart-widget error detection
-  (`widgetErrors.chart`, the "Chart widget blocked" / Retry UI) is the
-  safety net — confirm in a real browser if this matters to you.
+  header. TradingView's own symbol-search API blocks automated/curl
+  verification (bot protection, 403s even with browser-realistic headers),
+  so this couldn't be confirmed the same way as every other exchange
+  integration in this project — confirmed instead by the user directly in
+  TradingView, all four symbols exist as listed above. The existing
+  chart-widget error detection (`widgetErrors.chart`, "Chart widget
+  blocked" / Retry) remains the safety net regardless.
 - **Order book strategy — read this before touching `cryptoProviders.js`:**
   Binance and Bitstamp push full L2 snapshots natively over WS — simple to
   consume. Kraken's WS v2 book channel is an incremental-delta stream: a
