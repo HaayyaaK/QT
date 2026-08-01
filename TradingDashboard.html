@@ -35,8 +35,17 @@
   address (proxy lives at C:\proxy-server, a separate project — see its
   README.md there, not a path under this repo); if you run it on a different port,
   update both PROXY_BASE_URL below and this connect-src list.
-  api.kraken.com and api.exchange.coinbase.com are crypto klines fallbacks
-  (both free/keyless/CORS-open, tried after Binance, before simulated data).
+  Crypto (BTC/USD, ETH/USD) has automatic multi-exchange failover, priority
+  order Kraken -> Bitstamp -> Gemini -> Binance (see cryptoProviders.js) —
+  every origin below is required, not optional, since any of the four can
+  become active at runtime. All confirmed CORS-open/keyless live before
+  adding: api.kraken.com (REST klines) + wss://ws.kraken.com (WS v2 order
+  book); www.bitstamp.net (REST klines) + wss://ws.bitstamp.net (WS order
+  book); api.gemini.com (REST candles AND REST order-book polling — see
+  cryptoProviders.js for why Gemini's book uses REST polling, not its WS
+  feed); api.binance.com + wss://stream.binance.com:9443 (final fallback).
+  Coinbase Exchange was removed — it's not part of the requested priority
+  list, keeping this CSP scoped to origins actually in use.
 -->
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'none';
@@ -46,7 +55,7 @@
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src 'self' https://fonts.gstatic.com;
   img-src 'self' data: https://s3.tradingview.com https://www.tradingview.com https://*.tradingview.com https://*.tradingview-widget.com;
-  connect-src 'self' https://api.binance.com wss://stream.binance.com:9443 https://api.kraken.com https://api.exchange.coinbase.com https://api.coingecko.com https://api.alternative.me http://127.0.0.1:8787 http://localhost:8787;
+  connect-src 'self' https://api.binance.com wss://stream.binance.com:9443 https://api.kraken.com wss://ws.kraken.com https://www.bitstamp.net wss://ws.bitstamp.net https://api.gemini.com https://api.coingecko.com https://api.alternative.me http://127.0.0.1:8787 http://localhost:8787;
   frame-src https://s3.tradingview.com https://www.tradingview.com https://*.tradingview.com https://tradingview-widget.com https://*.tradingview-widget.com;
 ">
 <script src="./support.js"></script>
@@ -83,6 +92,9 @@
       <div aria-hidden="true" style="width:9px;height:9px;border-radius:50%;background:{{ wsDotColor }};animation:qt-pulse 2s ease-in-out infinite"></div>
       <h1 style="margin:0;font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:700;letter-spacing:0.5px;color:#eef1f5">QUANT<span style="color:#60a5fa">/</span>TERMINAL</h1>
       <div role="status" aria-live="polite" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{{ wsStatusColor }};padding:3px 9px;border:1px solid {{ wsStatusColor }};border-radius:3px;white-space:nowrap">{{ wsStatusText }}</div>
+      <sc-if value="{{ cryptoProviderVisible }}">
+        <div title="Active crypto data provider (ACTIVE_PROVIDER) — Kraken > Bitstamp > Gemini > Binance, auto-failover/recovery" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#7b8494;padding:3px 9px;border:1px solid #1e2530;border-radius:3px;white-space:nowrap">{{ cryptoProviderLabel }}</div>
+      </sc-if>
       <sc-if value="{{ wsOffline }}">
         <button onClick="{{ reconnectWS }}" style="cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:11px;padding:3px 9px;border-radius:3px;border:1px solid #60a5fa;color:#60a5fa;background:transparent">Reconnect</button>
       </sc-if>
@@ -181,7 +193,7 @@
         </sc-for>
       </sc-if>
       <sc-if value="{{ orderBookUnavailable }}">
-        <div style="height:300px;display:flex;align-items:center;justify-content:center;text-align:center;color:#4a5568;font-size:12px;padding:0 20px">Binance L2 stream covers crypto pairs only. Select BTC/USD or ETH/USD to view live depth.</div>
+        <div style="height:300px;display:flex;align-items:center;justify-content:center;text-align:center;color:#4a5568;font-size:12px;padding:0 20px">Live L2 depth covers crypto pairs only. Select BTC/USD or ETH/USD to view it.</div>
       </sc-if>
     </div>
 
@@ -418,13 +430,20 @@ class Component extends DCLogic {
     this.cache = {};
     this.alertFlags = {};
     this.ta = null;
-    this.ws = null;
-    this.reconnectDelay = 1000;
-    this.reconnectTimer = null;
+    this.cryptoProviders = null; // PROVIDERS array from cryptoProviders.js, set in componentDidMount
+    // Single shared ACTIVE_PROVIDER for both klines and the L2 order book,
+    // in priority order: Kraken -> Bitstamp -> Gemini -> Binance. Starts
+    // on the top of the list; failovers move the index forward, the
+    // recovery health-check (startCryptoHealthCheck) tries to move it back.
+    this.cryptoActiveId = 'kraken';
+    this.bookConnection = null; // handle returned by a provider's connectBook()
+    this.bookFailCount = 0;
+    this.bookReconnectDelay = 1000;
+    this.bookReconnectTimer = null;
+    this.cryptoHealthTimer = null;
+    this.MAX_PROVIDER_BOOK_FAILURES = 3; // consecutive failures before failing over to the next exchange
     this.unmounted = false;
     this.pendingBook = null;
-    this.wsFailCount = 0;
-    this.MAX_WS_RECONNECT_ATTEMPTS = 6;
     // Local API proxy (separate project at C:\proxy-server, see its
     // README.md — not part of this repo) — holds the keyed FX
     // fallback sources (TwelveData, Alpha Vantage) and proxies Yahoo
@@ -464,6 +483,10 @@ class Component extends DCLogic {
   async componentDidMount() {
     const taEngine = await import('./taEngine.js');
     this.ta = taEngine;
+    const { PROVIDERS, attemptWithFailover } = await import('./cryptoProviders.js');
+    this.cryptoProviders = PROVIDERS;
+    this.attemptWithFailover = attemptWithFailover;
+    this.cryptoActiveId = PROVIDERS[0].id;
     this.clockTimer = setInterval(() => this.setState({ clockText: new Date().toISOString().substr(11, 8) }), 1000);
     this.fetchGlobalMetrics();
     this.metricsTimer = setInterval(() => this.fetchGlobalMetrics(), 300000);
@@ -471,6 +494,10 @@ class Component extends DCLogic {
     this.klinesTimer = setInterval(() => this.fetchAllKlines(), 180000);
     this.loadMTF(this.state.symbol);
     this.connectWS(this.state.symbol);
+    // Recovery health-check: only relevant once we've failed over away from
+    // the top-priority provider, so it's cheap and quiet the vast majority
+    // of the time (see checkCryptoRecovery's early return).
+    this.cryptoHealthTimer = setInterval(() => this.checkCryptoRecovery(), 20000);
     this.mountChart();
     this.mountHeatmap();
     this.mountCalendar();
@@ -489,8 +516,9 @@ class Component extends DCLogic {
     clearInterval(this.bookFlushTimer);
     clearInterval(this.macroTimer);
     clearInterval(this.newsApiTimer);
-    clearTimeout(this.reconnectTimer);
-    if (this.ws) { try { this.ws.close(); } catch (e) {} }
+    clearInterval(this.cryptoHealthTimer);
+    clearTimeout(this.bookReconnectTimer);
+    if (this.bookConnection) { try { this.bookConnection.close(); } catch (e) {} }
   }
 
   symMeta(id) { return this.symbols.find(s => s.id === id); }
@@ -551,56 +579,90 @@ class Component extends DCLogic {
     }
   }
 
-  async fetchBinanceKlines(symbol, interval, limit) {
-    const r = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
-    if (!r.ok) throw new Error('binance http ' + r.status);
-    const rows = await r.json();
-    if (!rows || rows.length < 20) throw new Error('insufficient');
-    return {
-      opens: rows.map(r => +r[1]), highs: rows.map(r => +r[2]), lows: rows.map(r => +r[3]),
-      closes: rows.map(r => +r[4]), volumes: rows.map(r => +r[5]),
-    };
+  // Production-friendly, low-noise logging per the crypto-provider
+  // failover system below. console.warn for anything actionable
+  // (unavailable/failing over), console.info for state transitions.
+  logProvider(level, msg) {
+    (level === 'WARN' ? console.warn : console.info)(`[${level}] ${msg}`);
   }
 
-  // Kraken's pair codes don't match our BTCUSD/ETHUSD ids directly (BTC is
-  // "XBT" in Kraken's naming) — mapped explicitly below. The response's
-  // data key varies by pair too ("XXBTZUSD", "XETHZUSD", ...), so it's
-  // looked up dynamically rather than assumed.
-  async fetchKrakenKlines(symbolId, interval, limit) {
-    const pair = { BTCUSD: 'XBTUSD', ETHUSD: 'ETHUSD' }[symbolId];
-    if (!pair) throw new Error('kraken: no pair mapping for ' + symbolId);
-    const minutes = { '5m': 5, '15m': 15, '1h': 60, '4h': 240, '1d': 1440 }[interval] || 60;
-    const r = await fetch(`https://api.kraken.com/0/public/OHLC?pair=${pair}&interval=${minutes}`);
-    if (!r.ok) throw new Error('kraken http ' + r.status);
-    const j = await r.json();
-    if (j.error && j.error.length) throw new Error('kraken: ' + j.error.join(', '));
-    const dataKey = Object.keys(j.result || {}).find(k => k !== 'last');
-    const rows = (dataKey && j.result[dataKey]) || [];
-    if (rows.length < 20) throw new Error('kraken: insufficient data');
-    const trimmed = rows.slice(-limit);
-    return {
-      opens: trimmed.map(r => +r[1]), highs: trimmed.map(r => +r[2]), lows: trimmed.map(r => +r[3]),
-      closes: trimmed.map(r => +r[4]), volumes: trimmed.map(r => +r[6]),
-    };
+  providerById(id) {
+    return this.cryptoProviders.find(p => p.id === id);
   }
 
-  // Coinbase Exchange candles: [time, low, high, open, close, volume],
-  // newest-first — note low/high precede open/close in the tuple order.
-  // No native 4h granularity; 6h (21600s) is the closest available and is
-  // only used as a last-resort fallback anyway.
-  async fetchCoinbaseKlines(symbolId, interval, limit) {
-    const product = { BTCUSD: 'BTC-USD', ETHUSD: 'ETH-USD' }[symbolId];
-    if (!product) throw new Error('coinbase: no product mapping for ' + symbolId);
-    const granularity = { '5m': 300, '15m': 900, '1h': 3600, '4h': 21600, '1d': 86400 }[interval] || 3600;
-    const r = await fetch(`https://api.exchange.coinbase.com/products/${product}/candles?granularity=${granularity}`);
-    if (!r.ok) throw new Error('coinbase http ' + r.status);
-    const rows = await r.json();
-    if (!Array.isArray(rows) || rows.length < 20) throw new Error('coinbase: insufficient data');
-    const chron = rows.slice().reverse().slice(-limit);
-    return {
-      opens: chron.map(r => +r[3]), highs: chron.map(r => +r[2]), lows: chron.map(r => +r[1]),
-      closes: chron.map(r => +r[4]), volumes: chron.map(r => +r[5]),
-    };
+  // Crypto klines with automatic exchange failover: tries the current
+  // ACTIVE_PROVIDER first, then walks *forward* (lower priority) through
+  // the remaining providers on failure — Kraken -> Bitstamp -> Gemini ->
+  // Binance -> simulated data as the last resort. A single shared
+  // cryptoActiveId governs both BTC/USD and ETH/USD (and the order book,
+  // see connectCryptoBook) — one active provider at a time, not
+  // independent per-symbol failover, matching "only one provider should
+  // supply bids/asks/spread/depth" for the book and keeping the whole
+  // crypto surface consistent about which exchange it's trusting right now.
+  async getCryptoKlines(symbolId, interval, limit) {
+    const outcome = await this.attemptWithFailover(
+      this.cryptoProviders,
+      this.cryptoActiveId,
+      (provider) => {
+        const nativeSym = provider.klinesSymbol[symbolId];
+        if (!nativeSym) throw new Error('no symbol mapping for ' + symbolId);
+        return provider.fetchKlines(nativeSym, interval, limit);
+      },
+      (provider, e) => this.logProvider('WARN', `${provider.label} klines failed for ${symbolId}: ${e.message}`)
+    );
+    if (outcome) {
+      if (outcome.provider.id !== this.cryptoActiveId) this.switchCryptoProvider(outcome.provider.id, `klines recovered on ${outcome.provider.label}`);
+      return { ...outcome.result, source: 'live' };
+    }
+    this.logProvider('WARN', `all crypto providers failed for ${symbolId} — using simulated data`);
+    return { ...this.ta.simulateKlines(symbolId + interval, limit, this.symMeta(symbolId).base), source: 'sim' };
+  }
+
+  // Switches the single shared ACTIVE_PROVIDER and, if a crypto symbol is
+  // currently selected, reconnects its order book on the new provider.
+  switchCryptoProvider(newId, reason) {
+    if (newId === this.cryptoActiveId) return;
+    const oldProvider = this.providerById(this.cryptoActiveId);
+    const newProvider = this.providerById(newId);
+    this.cryptoActiveId = newId;
+    this.logProvider('INFO', `Switching from ${oldProvider ? oldProvider.label : this.cryptoActiveId} to ${newProvider.label} (${reason})`);
+    const sel = this.symMeta(this.state.symbol);
+    if (sel && sel.type === 'crypto') this.connectCryptoBook(this.state.symbol);
+  }
+
+  // Forward failover: move to the next lower-priority provider. If we're
+  // already on the last one (Binance) and it's failing too, there's
+  // nowhere left to go — surface 'offline' rather than silently retrying
+  // forever (the manual Reconnect control resets to the top provider).
+  failoverCryptoProvider(reason) {
+    const idx = this.cryptoProviders.findIndex(p => p.id === this.cryptoActiveId);
+    const next = this.cryptoProviders[idx + 1];
+    if (!next) {
+      this.logProvider('WARN', `${this.providerById(this.cryptoActiveId).label} unavailable and no lower-priority provider remains`);
+      this.setState({ wsStatus: 'offline' });
+      return;
+    }
+    this.switchCryptoProvider(next.id, reason);
+  }
+
+  // Recovery: if we're not already on the top-priority provider, probe
+  // every higher-priority provider (top-down, so we land on the best one
+  // that's healthy) with a real klines fetch — cheap, reuses existing
+  // code, and if it succeeds we already have fresh data ready to use.
+  // Runs every 20s (componentDidMount) but only does real work when
+  // failed-over, which is the uncommon case.
+  async checkCryptoRecovery() {
+    if (this.unmounted || !this.cryptoProviders) return;
+    const activeIdx = this.cryptoProviders.findIndex(p => p.id === this.cryptoActiveId);
+    if (activeIdx <= 0) return; // already on the top provider, nothing to recover to
+    for (let i = 0; i < activeIdx; i++) {
+      const candidate = this.cryptoProviders[i];
+      try {
+        await candidate.fetchKlines(candidate.klinesSymbol.BTCUSD, '1h', 20);
+        this.switchCryptoProvider(candidate.id, `${candidate.label} recovered`);
+        return;
+      } catch (e) { /* still unhealthy, try the next-highest candidate */ }
+    }
   }
 
   // FX/metals klines: delegates to the local proxy (C:\proxy-server, separate project),
@@ -633,16 +695,7 @@ class Component extends DCLogic {
 
   async getKlinesForInterval(sym, interval, limit) {
     if (sym.type === 'crypto') {
-      for (const attempt of [
-        () => this.fetchBinanceKlines(sym.id, interval, limit),
-        () => this.fetchKrakenKlines(sym.id, interval, limit),
-        () => this.fetchCoinbaseKlines(sym.id, interval, limit),
-      ]) {
-        try {
-          return { ...(await attempt()), source: 'live' };
-        } catch (e) { /* try the next crypto source */ }
-      }
-      return { ...this.ta.simulateKlines(sym.id + interval, limit, sym.base), source: 'sim' };
+      return this.getCryptoKlines(sym.id, interval, limit);
     }
     try {
       const data = await this.fetchFxViaProxy(sym.id, interval, limit);
@@ -794,52 +847,85 @@ class Component extends DCLogic {
     this.mountChart(id);
   }
 
+  // Public entry point (same name/signature as before the multi-exchange
+  // rework) — componentDidMount and changeSymbol call this without caring
+  // which provider ends up serving the book.
   connectWS(symbolId) {
-    clearInterval(this.bookFlushTimer);
-    clearTimeout(this.reconnectTimer);
-    if (this.ws) { try { this.ws.close(); } catch (e) {} this.ws = null; }
     const sym = this.symMeta(symbolId);
-    if (sym.type !== 'crypto') { this.setState({ wsStatus: 'unavailable' }); return; }
-    this.reconnectDelay = 1000;
-    this.wsFailCount = 0;
-    this._openWS(symbolId);
+    if (sym.type !== 'crypto') {
+      clearTimeout(this.bookReconnectTimer);
+      clearInterval(this.bookFlushTimer);
+      if (this.bookConnection) { try { this.bookConnection.close(); } catch (e) {} this.bookConnection = null; }
+      this.setState({ wsStatus: 'unavailable' });
+      return;
+    }
+    this.connectCryptoBook(symbolId);
   }
 
-  // Manual reconnect after the connection has been marked 'offline' —
-  // resets the failure counter and backoff so it gets a fresh run of
-  // automatic retries rather than immediately re-declaring itself offline.
+  // Manual reconnect (the "Reconnect" control, shown when wsStatus is
+  // 'offline') — resets all the way back to the top-priority provider
+  // rather than just retrying whatever was last active, since a human
+  // asking for a reconnect wants the best available exchange, not
+  // whichever one happened to fail last.
   manualReconnectWS() {
+    this.cryptoActiveId = this.cryptoProviders[0].id;
+    this.bookFailCount = 0;
+    this.bookReconnectDelay = 1000;
     this.connectWS(this.state.symbol);
   }
 
-  _openWS(symbolId) {
+  // Opens the L2 order book on the current ACTIVE_PROVIDER for the given
+  // crypto symbol. On repeated failure (MAX_PROVIDER_BOOK_FAILURES
+  // consecutive closes/errors) escalates to failoverCryptoProvider()
+  // instead of retrying the same exchange forever; below that threshold,
+  // retries the same provider with exponential backoff, same as the
+  // original single-exchange behavior.
+  connectCryptoBook(symbolId, opts = {}) {
+    clearTimeout(this.bookReconnectTimer);
+    if (this.bookConnection) { try { this.bookConnection.close(); } catch (e) {} this.bookConnection = null; }
+    clearInterval(this.bookFlushTimer);
     if (this.unmounted) return;
+    const provider = this.providerById(this.cryptoActiveId);
+    const nativeSym = provider.bookSymbol[symbolId];
+    if (!nativeSym) { this.setState({ wsStatus: 'unavailable' }); return; }
+    if (opts.resetFailCount !== false) this.bookFailCount = 0;
+    if (opts.resetDelay !== false) this.bookReconnectDelay = 1000;
     this.setState({ wsStatus: 'connecting' });
-    const ws = new WebSocket(`wss://stream.binance.com:9443/ws/${symbolId.toLowerCase()}@depth20@100ms`);
-    this.ws = ws;
-    ws.onopen = () => { this.reconnectDelay = 1000; this.wsFailCount = 0; this.setState({ wsStatus: 'connected' }); };
-    ws.onmessage = (ev) => { this.pendingBook = JSON.parse(ev.data); };
-    ws.onerror = () => {};
-    ws.onclose = () => {
-      if (this.unmounted || this.state.symbol !== symbolId) return;
-      this.wsFailCount++;
-      if (this.wsFailCount >= this.MAX_WS_RECONNECT_ATTEMPTS) {
-        // Stop retrying automatically — a truly dead connection (region
-        // block, extended outage) should tell the user, not silently churn
-        // reconnect attempts forever in a background tab. connectWS() /
-        // manualReconnectWS() (wired to a "Reconnect" control) resets this.
-        this.setState({ wsStatus: 'offline' });
-        return;
-      }
-      this.setState({ wsStatus: 'reconnecting' });
-      this.reconnectTimer = setTimeout(() => { this.reconnectDelay = Math.min(this.reconnectDelay * 2, 30000); this._openWS(symbolId); }, this.reconnectDelay);
-    };
+    const openedForSymbol = symbolId, openedForProvider = provider.id;
+    this.bookConnection = provider.connectBook(nativeSym, {
+      onBook: (bids, asks) => { this.pendingBook = { bids, asks }; },
+      onStatus: (status) => {
+        // Ignore callbacks from a connection we've already moved away from
+        // (symbol switched, or already failed over to a different provider).
+        if (this.unmounted || this.state.symbol !== openedForSymbol || this.cryptoActiveId !== openedForProvider) return;
+        if (status === 'connected') {
+          this.bookReconnectDelay = 1000;
+          this.bookFailCount = 0;
+          this.setState({ wsStatus: 'connected' });
+          this.logProvider('INFO', `Connected to ${provider.label}`);
+        } else if (status === 'connecting') {
+          this.setState({ wsStatus: 'connecting' });
+        } else {
+          this.bookFailCount++;
+          if (this.bookFailCount >= this.MAX_PROVIDER_BOOK_FAILURES) {
+            this.logProvider('WARN', `${provider.label} unavailable`);
+            this.failoverCryptoProvider(`order book failed ${this.bookFailCount}x on ${provider.id}`);
+          } else {
+            this.setState({ wsStatus: 'reconnecting' });
+            this.bookReconnectTimer = setTimeout(() => {
+              this.connectCryptoBook(symbolId, { resetDelay: false, resetFailCount: false });
+            }, this.bookReconnectDelay);
+            this.bookReconnectDelay = Math.min(this.bookReconnectDelay * 2, 15000);
+          }
+        }
+      },
+    });
     clearInterval(this.bookFlushTimer);
     this.bookFlushTimer = setInterval(() => {
       if (!this.pendingBook) return;
       const b = this.pendingBook; this.pendingBook = null;
-      const bids = (b.bids || []).map(([p, q]) => [+p, +q]).slice(0, 12);
-      const asks = (b.asks || []).map(([p, q]) => [+p, +q]).slice(0, 12);
+      const bids = (b.bids || []).slice(0, 12);
+      const asks = (b.asks || []).slice(0, 12);
       const mid = bids[0] && asks[0] ? (bids[0][0] + asks[0][0]) / 2 : null;
       const spread = bids[0] && asks[0] ? asks[0][0] - bids[0][0] : null;
       this.setState({ bids, asks, mid, spread });
@@ -986,9 +1072,16 @@ class Component extends DCLogic {
       return { bidRows, askRows, depthBidPath, depthAskPath };
     });
 
+    // ACTIVE_PROVIDER, exposed for debugging (spec section 10) — a small
+    // label next to the connection status chip, visible only while a
+    // crypto symbol is selected (the provider concept doesn't apply to FX).
+    const cryptoProviderVisible = isCrypto && !!this.cryptoProviders;
+    const cryptoProviderLabel = cryptoProviderVisible ? this.providerById(this.cryptoActiveId).label.toUpperCase() : '';
+
     return {
       wsDotColor: wsStatusColor, wsStatusColor, wsStatusText: wsTextMap[s.wsStatus] || 'OFFLINE',
       wsOffline: s.wsStatus === 'offline', reconnectWS: () => this.manualReconnectWS(),
+      cryptoProviderVisible, cryptoProviderLabel,
       clockText: s.clockText, symbolChips, selectedLabel: sym.label,
       hasSimulatedData, simulatedSymbolsText,
       sentimentNeedleDeg, sentimentColor, sentimentLabel, sentimentScore: clamped,

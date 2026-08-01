@@ -37,6 +37,10 @@ panels show a "not running" state with a Retry button, instead of failing silent
 - `taEngine.js` — dependency-free technical-analysis math (SMA/EMA/RSI/MACD/
   Bollinger/ATR/ADX/Stochastic/VWAP/Donchian/Pearson correlation + a deterministic
   simulated-kline fallback).
+- `cryptoProviders.js` — the crypto exchange provider registry (Kraken/
+  Bitstamp/Gemini/Binance klines + order-book connectors) and the
+  `attemptWithFailover` algorithm the Component uses to walk through them.
+  See "Crypto: multi-exchange failover" below.
 - `support.js` — **generated, vendored runtime** ("GENERATED from
   dc-runtime/src/*.ts — do not edit. Rebuild with `bun run build`"). Compiles the
   `{{ }}` / `sc-if` / `sc-for` template syntax in `TradingDashboard.html` to React,
@@ -56,22 +60,58 @@ USD/CHF, XAU/USD.
 
 ## Data sources
 
-| Asset class | Primary | Fallback chain | Where it runs |
-|---|---|---|---|
-| Crypto (BTC, ETH) | Binance public klines + WS depth | Kraken public OHLC → Coinbase Exchange public candles | Browser, direct (all free/keyless/CORS-open) |
-| FX majors & XAU | Yahoo Finance chart API | TwelveData → Alpha Vantage | **Proxy** (`/api/fx/klines`) — Yahoo has no CORS, TwelveData/Alpha Vantage need a key |
-| Market news | NewsAPI.org | — | **Proxy** (`/api/news`) — needs a key |
-| Macro / Fed data | FRED (Federal Reserve Economic Data) | — | **Proxy** (`/api/fred/snapshot`, `/api/fred/series`) — needs a key |
-| Fear & Greed, BTC/ETH dominance | alternative.me, CoinGecko | — | Browser, direct (free/keyless/CORS-open) |
+| Asset class | Priority order | Where it runs |
+|---|---|---|
+| Crypto (BTC/USD, ETH/USD) | **Kraken → Bitstamp → Gemini → Binance** (automatic failover + recovery) | Browser, direct (all four free/keyless/CORS-open) |
+| FX majors & XAU | Yahoo Finance chart API → TwelveData → Alpha Vantage | **Proxy** (`/api/fx/klines`) — Yahoo has no CORS, TwelveData/Alpha Vantage need a key |
+| Market news | NewsAPI.org | **Proxy** (`/api/news`) — needs a key |
+| Macro / Fed data | FRED (Federal Reserve Economic Data) | **Proxy** (`/api/fred/snapshot`, `/api/fred/series`) — needs a key |
+| Fear & Greed, BTC/ETH dominance | alternative.me, CoinGecko | Browser, direct (free/keyless/CORS-open) |
 
-Any source in a fallback chain that fails moves to the next one silently; if
-every source in a chain fails, the affected symbol/panel falls back to
-simulated data (klines) or an explicit "not available" state (news/macro) —
-never a broken or blank card with no explanation.
+Any source in a fallback chain that fails moves to the next one; if every
+source in a chain fails, the affected symbol/panel falls back to simulated
+data (klines) or an explicit "not available" state (news/macro) — never a
+broken or blank card with no explanation.
+
+### Crypto: multi-exchange failover with automatic recovery
+
+`cryptoProviders.js` is a self-contained provider registry — one entry per
+exchange (REST klines fetcher + L2 order-book connector), so adding a fifth
+exchange later means adding one entry there, not touching the failover logic
+itself. `ACTIVE_PROVIDER` (`Component.cryptoActiveId` in
+`TradingDashboard.html`, shown in the header when a crypto symbol is
+selected) is a single state shared by both klines and the order book — only
+one exchange is ever trusted at a time.
+
+- **Forward failover:** a kline fetch failure or `MAX_PROVIDER_BOOK_FAILURES`
+  (3) consecutive order-book connection failures moves `ACTIVE_PROVIDER` to
+  the next lower-priority exchange. Never wraps back to a higher-priority one
+  within the same failed request — that's the recovery check's job, below.
+- **Recovery:** every 20s, if not already on Kraken, the dashboard probes
+  each higher-priority exchange (top-down) with a real klines fetch; the
+  first one that succeeds becomes the new `ACTIVE_PROVIDER` and the order
+  book reconnects there. Matches: Kraken down → Bitstamp active → Kraken
+  recovers → automatically back on Kraken.
+- **Manual reconnect** (the "Reconnect" control, shown when `wsStatus` is
+  `offline` — i.e. even Binance, the last resort, is down) resets straight
+  to Kraken rather than retrying whatever failed last.
+- **Order book strategy — read this before touching `cryptoProviders.js`:**
+  Binance and Bitstamp push full L2 snapshots natively over WS. Kraken's WS
+  v2 book channel and Gemini's WS feed are both *incremental-delta* streams
+  that need local order-book state to stay correct long-term — meaningfully
+  more infrastructure and a real source of subtle bugs. Kraken's connector
+  here re-subscribes every ~3s for a fresh full snapshot instead of merging
+  deltas; Gemini's connector polls its REST book endpoint every ~2s instead
+  of using its WS feed at all. Both are still real, live exchange data —
+  refreshed every 2-3s rather than on every individual book-level tick. This
+  is a deliberate, documented tradeoff (see the comment at the top of
+  `cryptoProviders.js`), not a hidden shortcut — and it matters more than it
+  might sound, since Kraken is now the *primary* provider, not a rare
+  fallback.
 
 ### Why FX/news/macro need a proxy and crypto doesn't
 
-Crypto's three sources are all free, keyless, and send
+Crypto's four sources are all free, keyless, and send
 `Access-Control-Allow-Origin` — a browser can call them directly, nothing to
 proxy. FX/news/macro don't have that luxury: Yahoo Finance's chart API sends
 no CORS headers at all (confirmed live — the browser blocks the response
@@ -103,8 +143,8 @@ project might publish or share.
   an "Expected moveto path command" error. This is inherent to the template
   runtime's pre-hydration paint and resolves itself within milliseconds — it
   is not a functional bug.
-- **No server-side caching in front of the free keyless APIs** (Binance,
-  Kraken, Coinbase, CoinGecko, alternative.me) — every visitor's browser
+- **No server-side caching in front of the free keyless APIs** (Kraken,
+  Bitstamp, Gemini, Binance, CoinGecko, alternative.me) — every visitor's browser
   polls them independently. CoinGecko's free tier rate-limits fairly
   aggressively; a real spike in concurrent users could degrade the
   sentiment panel for everyone in that window. Fine for personal/low-traffic
@@ -246,6 +286,17 @@ pass (same day) that:
 - Gave the correlation-matrix card a fixed height with sticky row/column
   headers, matching the sector-heatmap card beside it instead of growing
   unbounded to fit all 10 rows.
+
+A fourth pass (2026-08-01) replaced the crypto data path entirely: fixed
+ADX/ATR reading impossible values (ADX hit 575, bounded 0-100 by
+definition — traced to a real weighting bug in `wilderSmooth()`, not a
+data issue), fixed NaN cells in the correlation matrix (a Yahoo gap-bar
+`null` leaking into the math unfiltered), then — at the user's request —
+replaced Binance-as-primary/Kraken+Coinbase-as-fallback with a proper
+multi-exchange failover system: Kraken → Bitstamp → Gemini → Binance, with
+automatic forward failover and periodic automatic recovery back toward
+Kraken. See "Crypto: multi-exchange failover" above and
+`cryptoProviders.js` for the implementation.
 
 **Deferred to next phase (Low severity, not yet addressed):**
 
