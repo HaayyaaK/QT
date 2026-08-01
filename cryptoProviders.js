@@ -14,25 +14,31 @@
 //
 // ORDER BOOK STRATEGY — read before changing anything here:
 // Binance and Bitstamp push full L2 snapshots natively over WS on every
-// update — simple and robust to consume as-is. Kraken's WS v2 "book"
-// channel and Gemini's WS market-data feed are both *incremental-delta*
-// streams: correct long-term consumption means maintaining local
-// order-book state (sorted price levels, applying add/update/remove per
-// message, handling sequence/out-of-order edge cases) — meaningfully more
-// infrastructure, and a real source of subtle bugs if not extensively
-// tested. Given the fallback nature of this system (any of the four can
-// be "active" at a given moment) and the time available to harden a full
-// delta-merge engine, this file deliberately uses a coarser-but-robust
-// strategy for those two instead:
-//   - Kraken:  re-subscribes to the WS "book" channel every ~3s to force
-//              a fresh full snapshot, rather than merging "update" deltas.
-//   - Gemini:  polls the REST order-book endpoint every ~2s instead of
-//              using the WS feed at all.
-// Both still show real, live exchange data — just refreshed every 2-3s
-// instead of on every individual book-level change. This is a deliberate,
-// documented tradeoff, not a silent shortcut: Kraken is now the PRIMARY
-// provider, so this is the common-case order-book experience, not a rare
-// fallback path, and it deserves this note front and center.
+// update. Kraken's WS v2 "book" channel is an incremental-delta stream —
+// its "snapshot" message only arrives once per subscription, then
+// per-level "update" deltas follow (qty 0 = remove that price level).
+// An earlier version of this file tried to force fresh snapshots by
+// re-subscribing every ~3s instead of merging deltas — CONFIRMED LIVE to
+// be broken: Kraken rejects a duplicate subscribe to an already-active
+// channel ({"success":false,"error":"Already subscribed"}) rather than
+// sending a new snapshot, so the book silently froze after the first
+// message (found via real browser testing, reproduced with a standalone
+// WS probe — see git history). Fixed by properly maintaining local
+// order-book state: a Map per side, upserted/deleted by each delta,
+// re-sorted and sliced to top-N on every update. This is what "handle
+// sequence/out-of-order edge cases" normally warns you off doing
+// casually — but the bug above proved the shortcut doesn't actually work,
+// so this is the real thing now, not a shortcut.
+// Gemini's WS market-data feed is the same class of incremental-delta
+// stream (confirmed live: an "initial" snapshot as ~4900 individual
+// per-level events, not one snapshot message) — building the same kind of
+// local-state engine for it was judged not worth the additional surface
+// area given Gemini is priority #3, not primary, and its REST order-book
+// endpoint polled every ~2s was verified live to work correctly and
+// continuously (sustained-update tested, not just a first-message check —
+// see cryptoProviders.test.js and the session's live verification notes).
+// That remains a deliberate, documented tradeoff: still real, live
+// exchange data, refreshed every ~2s rather than on every tick.
 
 function toPairs(arr, priceKey, qtyKey) {
   if (!Array.isArray(arr)) return [];
@@ -61,38 +67,61 @@ async function krakenKlines(nativeSymbol, interval, limit) {
   };
 }
 
+// Applies Kraken's delta convention (qty 0 = remove, otherwise upsert) to
+// a local price->qty Map. Exported for direct unit testing.
+export function applyKrakenLevels(map, levels) {
+  for (const lvl of levels || []) {
+    if (lvl.qty === 0) map.delete(lvl.price);
+    else map.set(lvl.price, lvl.qty);
+  }
+  return map;
+}
+
+// Derives the sorted top-N view from a price->qty Map. Exported for
+// direct unit testing. side: 'bids' sorts descending (best/highest
+// first), 'asks' ascending (best/lowest first) — standard L2 convention.
+export function topLevels(map, side, n = 10) {
+  const entries = [...map.entries()];
+  entries.sort((a, b) => (side === 'bids' ? b[0] - a[0] : a[0] - b[0]));
+  return entries.slice(0, n);
+}
+
 function krakenConnectBook(wsSymbol, { onBook, onStatus }) {
-  const REFRESH_MS = 3000;
-  let ws = null, resubTimer = null, closed = false;
+  let ws = null, closed = false;
+  let bidMap = new Map(), askMap = new Map(); // price -> qty, maintained locally
+  function emit() {
+    onBook(topLevels(bidMap, 'bids'), topLevels(askMap, 'asks'));
+  }
   function open() {
     if (closed) return;
     onStatus('connecting');
     ws = new WebSocket('wss://ws.kraken.com/v2');
     ws.onopen = () => {
       onStatus('connected');
-      const sub = () => ws.readyState === WebSocket.OPEN &&
-        ws.send(JSON.stringify({ method: 'subscribe', params: { channel: 'book', symbol: [wsSymbol], depth: 10 } }));
-      sub();
-      resubTimer = setInterval(sub, REFRESH_MS);
+      ws.send(JSON.stringify({ method: 'subscribe', params: { channel: 'book', symbol: [wsSymbol], depth: 10 } }));
     };
     ws.onmessage = (ev) => {
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
-      // Only the full "snapshot" is consumed — see the file-level note above
-      // on why incremental "update" deltas aren't merged here.
-      if (msg.channel === 'book' && msg.type === 'snapshot' && Array.isArray(msg.data) && msg.data[0]) {
-        const d = msg.data[0];
-        onBook(toPairs(d.bids, 'price', 'qty'), toPairs(d.asks, 'price', 'qty'));
+      if (msg.channel !== 'book' || !Array.isArray(msg.data) || !msg.data[0]) return;
+      const d = msg.data[0];
+      if (msg.type === 'snapshot') {
+        bidMap = new Map((d.bids || []).map((l) => [l.price, l.qty]));
+        askMap = new Map((d.asks || []).map((l) => [l.price, l.qty]));
+        emit();
+      } else if (msg.type === 'update') {
+        applyKrakenLevels(bidMap, d.bids);
+        applyKrakenLevels(askMap, d.asks);
+        emit();
       }
     };
     ws.onerror = () => {};
-    ws.onclose = () => { clearInterval(resubTimer); if (!closed) onStatus('closed'); };
+    ws.onclose = () => { if (!closed) onStatus('closed'); };
   }
   open();
   return {
     close() {
       closed = true;
-      clearInterval(resubTimer);
       if (ws) { try { ws.close(); } catch {} }
     },
   };

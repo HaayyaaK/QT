@@ -95,19 +95,46 @@ one exchange is ever trusted at a time.
 - **Manual reconnect** (the "Reconnect" control, shown when `wsStatus` is
   `offline` — i.e. even Binance, the last resort, is down) resets straight
   to Kraken rather than retrying whatever failed last.
+- **Data-staleness watchdog:** connection status (open/closed/error) is
+  *not* sufficient health monitoring on its own — a real bug proved this
+  (see below). `connectCryptoBook` tracks the time since the last actual
+  `onBook` update and treats "still connected, but no data in >15s" the
+  same as a hard failure, escalating through the same failover path.
+- **TradingView chart follows `ACTIVE_PROVIDER`** too (`tvSymbolFor()` —
+  `KRAKEN:BTCUSD` / `BITSTAMP:BTCUSD` / `GEMINI:BTCUSD` / `BINANCE:BTCUSD`),
+  remounting on every provider switch, shown in the "ADVANCED CHART" panel
+  header. **Caveat:** TradingView's symbol-search API blocks automated/curl
+  verification (bot protection, 403s even with browser headers), so unlike
+  every other exchange integration in this project, these three symbol
+  strings were not independently confirmed to exist via a live API check —
+  they follow the same naming convention as the already-working
+  `BINANCE:BTCUSD`, and Kraken/Bitstamp/Gemini are all long-established,
+  major exchanges TradingView is very likely to list. If any of the three
+  turns out wrong, the existing chart-widget error detection
+  (`widgetErrors.chart`, the "Chart widget blocked" / Retry UI) is the
+  safety net — confirm in a real browser if this matters to you.
 - **Order book strategy — read this before touching `cryptoProviders.js`:**
-  Binance and Bitstamp push full L2 snapshots natively over WS. Kraken's WS
-  v2 book channel and Gemini's WS feed are both *incremental-delta* streams
-  that need local order-book state to stay correct long-term — meaningfully
-  more infrastructure and a real source of subtle bugs. Kraken's connector
-  here re-subscribes every ~3s for a fresh full snapshot instead of merging
-  deltas; Gemini's connector polls its REST book endpoint every ~2s instead
-  of using its WS feed at all. Both are still real, live exchange data —
-  refreshed every 2-3s rather than on every individual book-level tick. This
-  is a deliberate, documented tradeoff (see the comment at the top of
-  `cryptoProviders.js`), not a hidden shortcut — and it matters more than it
-  might sound, since Kraken is now the *primary* provider, not a rare
-  fallback.
+  Binance and Bitstamp push full L2 snapshots natively over WS — simple to
+  consume. Kraken's WS v2 book channel is an incremental-delta stream: a
+  **real bug**, found via live browser testing and confirmed with a
+  standalone WS probe, is that an earlier version tried to force fresh data
+  by re-subscribing to the same channel every ~3s instead of merging
+  deltas — Kraken rejects a duplicate subscribe
+  (`{"success":false,"error":"Already subscribed"}`) rather than sending a
+  new snapshot, so the book silently froze after the very first message.
+  Fixed by properly maintaining local order-book state (`applyKrakenLevels`
+  / `topLevels` in `cryptoProviders.js`, unit-tested) — a `Map` per side,
+  upserted/deleted by each delta, re-sorted to top-10 on every update.
+  Gemini's WS feed is the same class of incremental stream (confirmed live:
+  its "initial" snapshot arrives as ~4900 individual per-level events, not
+  one message) — building the same local-state engine for it was judged not
+  worth the added surface area given Gemini is priority #3, not primary,
+  and its REST order-book endpoint (polled every ~2s) was verified live to
+  work correctly *and continuously* — sustained-update tested over 10s, not
+  just a first-message check, after the Kraken bug above made clear that
+  distinction matters. That remains a deliberate, documented tradeoff, not
+  a bug: still real, live exchange data, refreshed every ~2s rather than on
+  every tick.
 
 ### Why FX/news/macro need a proxy and crypto doesn't
 
@@ -297,6 +324,18 @@ multi-exchange failover system: Kraken → Bitstamp → Gemini → Binance, with
 automatic forward failover and periodic automatic recovery back toward
 Kraken. See "Crypto: multi-exchange failover" above and
 `cryptoProviders.js` for the implementation.
+
+A fifth pass (2026-08-01, same day) fixed a real bug the user found via
+live browser testing: the L2 order book and depth chart were frozen after
+the first update. Root cause was Kraken's order-book connector — see
+"Order book strategy" above for the full story (Kraken rejects a
+repeated-subscribe attempt instead of sending fresh data; fixed with
+proper incremental order-book merging, now unit-tested). Also added the
+data-staleness watchdog that should have caught this class of bug on its
+own (connection-status monitoring alone isn't sufficient — a socket can
+stay technically "connected" while silently delivering nothing), and wired
+the TradingView chart to follow `ACTIVE_PROVIDER` instead of a fixed
+Binance mapping, which had been a real gap against the original spec.
 
 **Deferred to next phase (Low severity, not yet addressed):**
 

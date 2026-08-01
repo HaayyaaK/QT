@@ -158,7 +158,7 @@
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px">
     <div style="grid-column:span 2;background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px;min-height:0">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-        <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">ADVANCED CHART · {{ selectedLabel }} <span style="color:#4a5568">(TradingView embed)</span></h2>
+        <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">ADVANCED CHART · {{ selectedLabel }} <span style="color:#4a5568">({{ chartSourceLabel }})</span></h2>
       </div>
       <div style="position:relative;height:460px;background:#0d1015;border-radius:4px">
         <div ref="{{ chartRef }}" style="width:100%;height:100%"></div>
@@ -517,6 +517,7 @@ class Component extends DCLogic {
     clearInterval(this.macroTimer);
     clearInterval(this.newsApiTimer);
     clearInterval(this.cryptoHealthTimer);
+    clearInterval(this.bookStaleWatchdog);
     clearTimeout(this.bookReconnectTimer);
     if (this.bookConnection) { try { this.bookConnection.close(); } catch (e) {} }
   }
@@ -619,7 +620,11 @@ class Component extends DCLogic {
   }
 
   // Switches the single shared ACTIVE_PROVIDER and, if a crypto symbol is
-  // currently selected, reconnects its order book on the new provider.
+  // currently selected, reconnects its order book *and* remounts the
+  // TradingView chart on the new provider — both must track
+  // ACTIVE_PROVIDER together, not just the order book, or the chart keeps
+  // showing whichever exchange happened to be active when it first
+  // mounted regardless of subsequent failover/recovery.
   switchCryptoProvider(newId, reason) {
     if (newId === this.cryptoActiveId) return;
     const oldProvider = this.providerById(this.cryptoActiveId);
@@ -627,7 +632,10 @@ class Component extends DCLogic {
     this.cryptoActiveId = newId;
     this.logProvider('INFO', `Switching from ${oldProvider ? oldProvider.label : this.cryptoActiveId} to ${newProvider.label} (${reason})`);
     const sel = this.symMeta(this.state.symbol);
-    if (sel && sel.type === 'crypto') this.connectCryptoBook(this.state.symbol);
+    if (sel && sel.type === 'crypto') {
+      this.connectCryptoBook(this.state.symbol);
+      this.mountChart(this.state.symbol);
+    }
   }
 
   // Forward failover: move to the next lower-priority provider. If we're
@@ -876,12 +884,23 @@ class Component extends DCLogic {
 
   // Opens the L2 order book on the current ACTIVE_PROVIDER for the given
   // crypto symbol. On repeated failure (MAX_PROVIDER_BOOK_FAILURES
-  // consecutive closes/errors) escalates to failoverCryptoProvider()
-  // instead of retrying the same exchange forever; below that threshold,
-  // retries the same provider with exponential backoff, same as the
-  // original single-exchange behavior.
+  // consecutive closes/errors, OR the data-staleness watchdog below firing)
+  // escalates to failoverCryptoProvider() instead of retrying the same
+  // exchange forever; below that threshold, retries the same provider
+  // with exponential backoff, same as the original single-exchange
+  // behavior.
+  //
+  // Data-staleness watchdog: connection *status* (open/closed/error) is
+  // not sufficient health monitoring on its own — found live, the hard
+  // way: an earlier version of Kraken's connector kept its WebSocket
+  // technically open and "connected" while silently never delivering
+  // another book update (see cryptoProviders.js's history/comments), so
+  // nothing on the connection-status path ever detected it as unhealthy.
+  // STALE_BOOK_MS tracks time since the last real onBook call and treats
+  // "still open, but no data in too long" the same as a hard failure.
   connectCryptoBook(symbolId, opts = {}) {
     clearTimeout(this.bookReconnectTimer);
+    clearInterval(this.bookStaleWatchdog);
     if (this.bookConnection) { try { this.bookConnection.close(); } catch (e) {} this.bookConnection = null; }
     clearInterval(this.bookFlushTimer);
     if (this.unmounted) return;
@@ -892,34 +911,49 @@ class Component extends DCLogic {
     if (opts.resetDelay !== false) this.bookReconnectDelay = 1000;
     this.setState({ wsStatus: 'connecting' });
     const openedForSymbol = symbolId, openedForProvider = provider.id;
+    const STALE_BOOK_MS = 15000;
+    this.lastBookUpdateAt = Date.now();
+    const isStaleConnection = () => this.unmounted || this.state.symbol !== openedForSymbol || this.cryptoActiveId !== openedForProvider;
+    const handleBookFailure = (reason) => {
+      if (isStaleConnection()) return;
+      this.bookFailCount++;
+      if (this.bookFailCount >= this.MAX_PROVIDER_BOOK_FAILURES) {
+        this.logProvider('WARN', `${provider.label} unavailable (${reason})`);
+        this.failoverCryptoProvider(`order book failed ${this.bookFailCount}x on ${provider.id}: ${reason}`);
+      } else {
+        this.setState({ wsStatus: 'reconnecting' });
+        this.bookReconnectTimer = setTimeout(() => {
+          this.connectCryptoBook(symbolId, { resetDelay: false, resetFailCount: false });
+        }, this.bookReconnectDelay);
+        this.bookReconnectDelay = Math.min(this.bookReconnectDelay * 2, 15000);
+      }
+    };
     this.bookConnection = provider.connectBook(nativeSym, {
-      onBook: (bids, asks) => { this.pendingBook = { bids, asks }; },
+      onBook: (bids, asks) => { this.lastBookUpdateAt = Date.now(); this.pendingBook = { bids, asks }; },
       onStatus: (status) => {
         // Ignore callbacks from a connection we've already moved away from
         // (symbol switched, or already failed over to a different provider).
-        if (this.unmounted || this.state.symbol !== openedForSymbol || this.cryptoActiveId !== openedForProvider) return;
+        if (isStaleConnection()) return;
         if (status === 'connected') {
           this.bookReconnectDelay = 1000;
           this.bookFailCount = 0;
+          this.lastBookUpdateAt = Date.now();
           this.setState({ wsStatus: 'connected' });
           this.logProvider('INFO', `Connected to ${provider.label}`);
         } else if (status === 'connecting') {
           this.setState({ wsStatus: 'connecting' });
         } else {
-          this.bookFailCount++;
-          if (this.bookFailCount >= this.MAX_PROVIDER_BOOK_FAILURES) {
-            this.logProvider('WARN', `${provider.label} unavailable`);
-            this.failoverCryptoProvider(`order book failed ${this.bookFailCount}x on ${provider.id}`);
-          } else {
-            this.setState({ wsStatus: 'reconnecting' });
-            this.bookReconnectTimer = setTimeout(() => {
-              this.connectCryptoBook(symbolId, { resetDelay: false, resetFailCount: false });
-            }, this.bookReconnectDelay);
-            this.bookReconnectDelay = Math.min(this.bookReconnectDelay * 2, 15000);
-          }
+          handleBookFailure(`connection ${status}`);
         }
       },
     });
+    clearInterval(this.bookStaleWatchdog);
+    this.bookStaleWatchdog = setInterval(() => {
+      if (isStaleConnection()) { clearInterval(this.bookStaleWatchdog); return; }
+      if (Date.now() - this.lastBookUpdateAt > STALE_BOOK_MS) {
+        handleBookFailure(`no data for over ${Math.round(STALE_BOOK_MS / 1000)}s`);
+      }
+    }, 5000);
     clearInterval(this.bookFlushTimer);
     this.bookFlushTimer = setInterval(() => {
       if (!this.pendingBook) return;
@@ -947,10 +981,23 @@ class Component extends DCLogic {
     }, 5000);
   }
 
+  // TradingView chart symbol for a given internal symbol. For crypto, this
+  // follows ACTIVE_PROVIDER (KRAKEN:BTCUSD / BITSTAMP:BTCUSD / GEMINI:BTCUSD
+  // / BINANCE:BTCUSD) so the chart genuinely reflects which exchange our
+  // own klines/order-book are trusting right now — not a fixed
+  // Binance-only mapping regardless of failover state. FX symbols are
+  // unaffected (sym.tv as before). Falls back to sym.tv if the provider
+  // registry hasn't loaded yet (chart can mount before componentDidMount's
+  // dynamic import of cryptoProviders.js resolves).
+  tvSymbolFor(sym) {
+    if (sym.type !== 'crypto' || !this.cryptoProviders) return sym.tv;
+    return `${this.providerById(this.cryptoActiveId).label.toUpperCase()}:${sym.id}`;
+  }
+
   mountChart(symbolId) {
     const sym = this.symMeta(symbolId || this.state.symbol);
     this.mountWidget(this.chartRef, 'chart', 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js', {
-      autosize: true, symbol: sym.tv, interval: '60', timezone: 'Etc/UTC', theme: 'dark', style: '1',
+      autosize: true, symbol: this.tvSymbolFor(sym), interval: '60', timezone: 'Etc/UTC', theme: 'dark', style: '1',
       locale: 'en', backgroundColor: 'rgba(13,16,21,1)', gridColor: 'rgba(30,37,48,0.4)',
       allow_symbol_change: false, hide_side_toolbar: true, support_host: 'https://www.tradingview.com',
     });
@@ -1077,11 +1124,14 @@ class Component extends DCLogic {
     // crypto symbol is selected (the provider concept doesn't apply to FX).
     const cryptoProviderVisible = isCrypto && !!this.cryptoProviders;
     const cryptoProviderLabel = cryptoProviderVisible ? this.providerById(this.cryptoActiveId).label.toUpperCase() : '';
+    const chartSourceLabel = cryptoProviderVisible
+      ? `TradingView embed · ${cryptoProviderLabel}`
+      : 'TradingView embed';
 
     return {
       wsDotColor: wsStatusColor, wsStatusColor, wsStatusText: wsTextMap[s.wsStatus] || 'OFFLINE',
       wsOffline: s.wsStatus === 'offline', reconnectWS: () => this.manualReconnectWS(),
-      cryptoProviderVisible, cryptoProviderLabel,
+      cryptoProviderVisible, cryptoProviderLabel, chartSourceLabel,
       clockText: s.clockText, symbolChips, selectedLabel: sym.label,
       hasSimulatedData, simulatedSymbolsText,
       sentimentNeedleDeg, sentimentColor, sentimentLabel, sentimentScore: clamped,
