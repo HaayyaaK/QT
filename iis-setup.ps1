@@ -32,7 +32,7 @@ $ErrorActionPreference = 'Stop'
 
 $siteName     = 'QuantTerminal'
 $poolName     = 'QuantTerminalPool'
-$physicalPath = 'C:\Users\Haayy\Documents\MyPersonal\Trading Dashboard DC'
+$physicalPath = 'C:\inetpub\wwwroot\projects\hayyaak_trading_dc'
 $hostnames    = @('forex.hayyaak.com', 'trade.hayyaak.com', 'hayyaak.trade')
 
 Import-Module WebAdministration
