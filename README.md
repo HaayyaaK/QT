@@ -122,6 +122,22 @@ one exchange is ever trusted at a time.
   Fixed by properly maintaining local order-book state (`applyKrakenLevels`
   / `topLevels` in `cryptoProviders.js`, unit-tested) — a `Map` per side,
   upserted/deleted by each delta, re-sorted to top-10 on every update.
+  Even with correct merging, an incremental stream has no way to notice a
+  **missed** delta on its own — confirmed live as a crossed book (best bid
+  above best ask) on a connection that was never actually interrupted, just
+  one dropped message. Kraken's `book` channel ships a CRC-32 checksum of
+  the top-10 bids/asks specifically to catch this; `krakenBookChecksum` in
+  `cryptoProviders.js` validates it after every snapshot/update and forces a
+  reconnect (fresh snapshot) on mismatch. The formatting isn't documented
+  anywhere obvious — calibrated by comparing candidate checksums against
+  Kraken's real live values: price at the pair's fixed tick decimals (1 for
+  BTC/USD, 2 for ETH/USD), qty at 8 decimals, asks-then-bids, concatenated
+  and CRC-32'd. **Observed live drift rate on this dev machine: roughly one
+  genuine mismatch every 10-15s** — high enough to be worth re-measuring
+  from wherever this is actually deployed (network path affects delta-loss
+  rate) before assuming it's universal. Each detected mismatch is a clean,
+  fast reconnect, not a failover — `bookFailCount` resets on the next
+  successful connection, so this doesn't cascade into a provider switch.
   Gemini's WS feed is the same class of incremental stream (confirmed live:
   its "initial" snapshot arrives as ~4900 individual per-level events, not
   one message) — building the same local-state engine for it was judged not
@@ -239,10 +255,20 @@ this CSP's `connect-src`, or the browser will silently block the calls.
 npm test
 ```
 
-Runs `taEngine.test.js` via Node's built-in test runner (`node --test`, no
-external dependencies) — covers SMA/EMA/RSI/MACD/Bollinger/Wilder-smoothing/
-ATR/ADX/Donchian/Pearson/trend-label/simulateKlines against a fixed OHLCV
-fixture. The proxy has its own separate test suite — see its README.
+Runs `taEngine.test.js` **and** `cryptoProviders.test.js` via Node's built-in
+test runner (`node --test`, no external dependencies, auto-discovers both
+`*.test.js` files — no separate invocation needed per file) — 40 tests total:
+
+- `taEngine.test.js` (22) — SMA/EMA/RSI/MACD/Bollinger/Wilder-smoothing/
+  ATR/ADX/Donchian/Pearson/trend-label/simulateKlines against a fixed OHLCV
+  fixture.
+- `cryptoProviders.test.js` (18) — provider registry integrity, the
+  `attemptWithFailover` algorithm, Kraken order-book merging
+  (`applyKrakenLevels`/`topLevels`), and the Kraken book-checksum validator
+  (`crc32`/`krakenBookChecksum`, tested against a real captured live
+  snapshot — see "Crypto: multi-exchange failover" below).
+
+The proxy has its own separate test suite — see its README.
 
 ## Production deployment (IIS)
 
@@ -333,6 +359,32 @@ own (connection-status monitoring alone isn't sufficient — a socket can
 stay technically "connected" while silently delivering nothing), and wired
 the TradingView chart to follow `ACTIVE_PROVIDER` instead of a fixed
 Binance mapping, which had been a real gap against the original spec.
+
+A sixth pass (2026-08-01, same day, commit `0ab4020`) fixed three bugs found
+via live browser failover testing:
+
+1. **Recovery/failover flapping** — the 20s recovery health-check had no
+   cooldown, so a provider whose REST klines came back healthy could
+   immediately trigger a switch-back while its WebSocket was still unstable,
+   producing rapid Kraken↔Bitstamp flapping. Fixed with a 45s cooldown in
+   `switchCryptoProvider` itself (covers every path that can move back
+   toward a higher-priority provider, not just the explicit health-check);
+   forward failover on a real live failure stays immediate, ungated.
+2. **Double connection on every page load** — `support.js`'s boot sequence
+   unconditionally self-fetched the page and called `updateHtml()`, racing
+   the initial mount and causing `TradingDashboard.html`'s `Component` to
+   mount twice, briefly opening two live Kraken connections before the
+   first was torn down. Fixed by gating that refetch behind `window.parent
+   !== window` (only relevant when an actual live-editor host is attached —
+   same condition `notifyHost()` already used).
+3. **Kraken book checksum validation**, described above under "Order book
+   strategy" — catches missed deltas that the incremental merge alone can't
+   detect.
+
+**Status: ready for production testing on IIS.** All three fixes are
+committed and unit-tested (40/40 passing); see `PROJECT_STATUS.md` for the
+live-browser test results this pass was based on, and `DEPLOYMENT.md` for
+moving this repo + the proxy to a hosting device.
 
 **Deferred to next phase (Low severity, not yet addressed):**
 
