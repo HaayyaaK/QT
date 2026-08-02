@@ -95,11 +95,50 @@ explicitly (11 tests).
 
 After the fix, the same production dashboard shows `0 SIGNALS` in the same window.
 
+## Production failover validation (2026-08-02, `fx.hayyaak.com`, Brave)
+
+Run during the Sunday window with FX and COMEX both shut, so the crypto book under test was
+the only live feed at risk. Fault injection was client-side and tab-local: `WebSocket` and
+`fetch` were wrapped to fail for a chosen exchange's endpoints, which drives the dashboard's
+real `handleBookFailure` path rather than stubbing the failover itself. Nothing server-side
+was touched and no other user was affected. All patches were discarded by a page reload
+afterwards; the dashboard was confirmed back on Kraken/LIVE.
+
+| Event | Result | Latency |
+|---|---|---|
+| Kraken book fails 3× → Bitstamp | ✅ `order book failed 3x on kraken: connection closed` | **2.45s** |
+| Bitstamp → Gemini → Binance (full chain) | ✅ each transition logged and applied | ~3-4s per hop |
+| All four blocked → chain exhausted | ✅ `no lower-priority provider remains`, status `OFFLINE`, no retry loop | 22s |
+| All restored → recovery | ✅ `Switching from Binance to Kraken (Kraken recovered)` — jumped straight to the top provider, not one hop at a time | 16.8s (bounded by the 20s health-check tick) |
+| **45s recovery cooldown** | ✅ **respected** | see below |
+
+Chart, header badge, order book, and depth chart all followed `ACTIVE_PROVIDER` at every
+transition (confirms commit `0ab4020`'s chart-follows-provider fix on production hardware).
+
+**Cooldown test.** Kraken was forced to fail (failover to Bitstamp at 15:05:14.900) and then
+made healthy again *immediately*. The 20s health-check therefore found Kraken healthy on every
+subsequent tick, so the only thing that could prevent an instant flap back was the cooldown.
+Measured from the component's own `switchCryptoProvider`, not from the DOM:
+
+```
+15:05:14.900  kraken -> bitstamp   forward (failover)   applied   "order book failed 3x"
+15:06:04.189  bitstamp -> kraken   BACKWARD (recovery)  applied   "Kraken recovered"
+                                   49.3s since previous switch  (cooldown 45s)
+```
+
+The ticks at roughly +20s and +40s did not switch back — `checkCryptoRecovery()` early-returns
+inside the cooldown before `switchCryptoProvider` is ever called, so a gated attempt leaves no
+log entry. No flapping.
+
+Method note: an earlier attempt measured this by polling the header badge in the DOM and
+produced 35.8s, which looked like a cooldown violation. It was a measurement artifact — DOM
+polling missed intermediate transitions and anchored the stopwatch to the wrong instant.
+Reading `switchCryptoProvider` directly is what gave a trustworthy number; the DOM figure
+should not be relied on.
+
 ## Open items
 
-- **Failover chain not yet validated on production.** Kraken → Bitstamp → Gemini → Binance and
-  the 45s recovery cooldown were verified on the dev machine (commit `0ab4020`) but never
-  forced on the hosting device. `DEPLOYMENT.md` lists this as worth re-confirming.
+- ~~Failover chain not yet validated on production.~~ **Done 2026-08-02, see below.**
 - **Longer soak (60+ min)** to confirm whether checksum mismatches are genuinely near-zero in
   production or just rare, and whether the ~7-minute Kraken reconnect is periodic. Traced as
   far as: no client-side reconnect timer exists in `cryptoProviders.js` or
