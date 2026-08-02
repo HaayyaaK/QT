@@ -55,8 +55,55 @@ Other things re-confirmed during the same session:
   order-book disruption, and no repeated pattern deviation accompanied it. Not yet root-caused
   in the code; worth a deliberate look if it recurs at exactly ~7min in a future longer soak.
 
-## Next step
+## Market-hours gating for the alert stream (2026-08-02)
 
-Longer soak (60+ minutes) would help confirm whether checksum mismatches are simply rarer in
-production or effectively absent, and would clarify whether the ~7-minute periodic reconnect is
-a deliberate interval somewhere in `cryptoProviders.js`/`support.js` or coincidental.
+**Correction to an earlier assessment.** Gating `detectAlerts()` on `source === 'live'`
+(commit `17ac3f2`) was reported as fixing the false-FX-signal problem. It does not, and the
+reasoning behind it was wrong: it assumed a closed FX market means no live data. In fact the
+proxy chain returns genuine last-session candles on a Sunday — verified directly,
+`/api/fx/klines?symbol=EURUSD` returns `source: "yahoo"` with 119 real closes — which
+`getKlinesForInterval()` then relabels `source: 'live'`. The gate only ever caught the case
+where the proxy was entirely unreachable.
+
+Measured on the production dashboard on Sunday 2026-08-02 14:21 UTC (FX shut since Friday),
+running the real alert conditions over the real proxy data that the dashboard itself was
+receiving:
+
+| Symbol | Proxy source | Would have fired |
+|---|---|---|
+| USD/JPY | yahoo | RSI oversold |
+| NZD/USD | yahoo | MACD bearish crossover |
+| USD/CAD | yahoo | MACD bearish crossover |
+| EUR/USD, GBP/USD, AUD/USD, USD/CHF | yahoo | — |
+| XAU/USD | twelvedata | — |
+
+Three signals on a closed market, all from real data. That is the bug the original report
+described, and `source === 'live'` would not have stopped any of them.
+
+Fixed by adding `marketHours.js` — session calendars consulted at the top of `detectAlerts()`:
+
+- **Crypto** — no calendar; 24/7 on all four providers in the failover chain. Exchange
+  maintenance is handled by provider failover, not by a schedule.
+- **FX majors** — Sunday 17:00 to Friday 17:00 *America/New_York*.
+- **XAU/USD** — COMEX: Sunday 17:00 to Friday 16:00 *America/Chicago*, plus the daily
+  16:00–17:00 CT maintenance break Mon–Thu.
+
+DST is delegated to `Intl.DateTimeFormat` with IANA zone names rather than UTC-offset
+arithmetic, because the FX rollover is 21:00 UTC in summer and 22:00 UTC in winter — any
+hardcoded offset is wrong for half the year. `marketHours.test.js` asserts both boundaries
+explicitly (11 tests).
+
+After the fix, the same production dashboard shows `0 SIGNALS` in the same window.
+
+## Open items
+
+- **Failover chain not yet validated on production.** Kraken → Bitstamp → Gemini → Binance and
+  the 45s recovery cooldown were verified on the dev machine (commit `0ab4020`) but never
+  forced on the hosting device. `DEPLOYMENT.md` lists this as worth re-confirming.
+- **Longer soak (60+ min)** to confirm whether checksum mismatches are genuinely near-zero in
+  production or just rare, and whether the ~7-minute Kraken reconnect is periodic. Traced as
+  far as: no client-side reconnect timer exists in `cryptoProviders.js` or
+  `TradingDashboard.html`, so it originates server-side (Kraken idle timeout) or at an
+  intermediate hop. Recovery is clean either way.
+- **Holiday calendars are not modelled.** `marketHours.js` handles weekly sessions and DST but
+  not Good Friday, Christmas, or other market holidays — alerts can still fire on those days.

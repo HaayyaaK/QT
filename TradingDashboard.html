@@ -497,6 +497,8 @@ class Component extends DCLogic {
     const { PROVIDERS, attemptWithFailover } = await import('./cryptoProviders.js');
     this.cryptoProviders = PROVIDERS;
     this.attemptWithFailover = attemptWithFailover;
+    const { isMarketOpen } = await import('./marketHours.js');
+    this.isMarketOpen = isMarketOpen;
     this.cryptoActiveId = PROVIDERS[0].id;
     this.clockTimer = setInterval(() => this.setState({ clockText: new Date().toISOString().substr(11, 8) }), 1000);
     this.fetchGlobalMetrics();
@@ -825,6 +827,13 @@ class Component extends DCLogic {
   }
 
   detectAlerts(sym, k) {
+    // Single choke point for "should this symbol be generating signals at
+    // all right now?". Note this deliberately does NOT touch alertFlags: the
+    // flags describe the last *evaluated* market state, and a closed market
+    // hasn't changed state — clearing them here would make every condition
+    // that was already true before the close re-fire as a fresh alert the
+    // moment trading resumes.
+    if (this.isMarketOpen && !this.isMarketOpen(sym.type, sym.id)) return [];
     const ta = this.ta;
     const { highs, lows, closes, volumes } = k;
     const donch = ta.donchian(highs, lows, 20);
@@ -1074,9 +1083,15 @@ class Component extends DCLogic {
     const fngValue = s.fng.value, fngLabel = s.fng.label;
     const fngColor = fngValue < 40 ? '#f87171' : fngValue > 60 ? '#34d399' : '#fbbf24';
     const snap = s.indicatorSnapshot;
-    const taScore = snap ? (
-      (snap.rsi > 50 ? 1 : -1) + (snap.macdH > 0 ? 1 : -1) + (snap.close > snap.e20 ? 1 : -1) + (snap.close > snap.vwap ? 1 : -1)
-    ) : 0;
+    // Each indicator casts a bull/bear vote, but abstains while it's still
+    // warming up. Comparing a null indicator (`null > 50`) silently yields
+    // false, which the old ternaries scored as a *bearish* vote — so a
+    // freshly-switched symbol whose EMA200/ADX/Stochastic hadn't filled yet
+    // showed a confident "Bearish" aggregate built from four non-answers.
+    const vote = (a, b) => (a == null || b == null) ? 0 : (a > b ? 1 : -1);
+    const taScore = snap
+      ? vote(snap.rsi, 50) + vote(snap.macdH, 0) + vote(snap.close, snap.e20) + vote(snap.close, snap.vwap)
+      : 0;
     const taAggLabel = taScore >= 2 ? 'Bullish' : taScore <= -2 ? 'Bearish' : 'Neutral';
     const taAggColor = taScore >= 2 ? '#34d399' : taScore <= -2 ? '#f87171' : '#fbbf24';
     const composite = Math.round((((typeof fngValue === 'number' ? fngValue : 50) - 50) + taScore * 12.5) / 2 + 50);
@@ -1167,8 +1182,12 @@ class Component extends DCLogic {
       sentimentNeedleDeg, sentimentColor, sentimentLabel, sentimentScore: clamped,
       sentimentAriaLabel: `Market sentiment: ${sentimentLabel}, composite score ${clamped} of 100`,
       fngValue, fngLabel, fngColor, taAggLabel, taAggColor,
-      btcDomText: s.dominance.btc.toFixed(1), btcDomPct: Math.min(100, s.dominance.btc),
-      ethDomText: s.dominance.eth.toFixed(1), ethDomPct: Math.min(100, s.dominance.eth * 2),
+      // Guarded for the same reason as indicatorRows: CoinGecko's
+      // market_cap_percentage is only spread into state on a successful
+      // fetch, but a 200 with an unexpected shape would leave these
+      // undefined and .toFixed() would take the whole render down.
+      btcDomText: fx1(s.dominance.btc), btcDomPct: Math.min(100, s.dominance.btc || 0),
+      ethDomText: fx1(s.dominance.eth), ethDomPct: Math.min(100, (s.dominance.eth || 0) * 2),
       chartRef: this.chartRef, heatmapRef: this.heatmapRef, calendarRef: this.calendarRef, newsRef: this.newsRef,
       widgetErrors: s.widgetErrors,
       retryChart: () => this.mountChart(), retryHeatmap: () => this.mountHeatmap(), retryCalendar: () => this.mountCalendar(), retryNews: () => this.mountNews(),
