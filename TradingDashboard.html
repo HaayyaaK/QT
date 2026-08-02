@@ -55,7 +55,7 @@
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src 'self' https://fonts.gstatic.com;
   img-src 'self' data: https://s3.tradingview.com https://www.tradingview.com https://*.tradingview.com https://*.tradingview-widget.com;
-  connect-src 'self' https://api.binance.com wss://stream.binance.com:9443 https://api.kraken.com wss://ws.kraken.com https://www.bitstamp.net wss://ws.bitstamp.net https://api.gemini.com https://api.coingecko.com https://api.alternative.me http://127.0.0.1:8787 http://localhost:8787;
+  connect-src 'self' https://api.binance.com wss://stream.binance.com:9443 https://api.kraken.com wss://ws.kraken.com https://www.bitstamp.net wss://ws.bitstamp.net https://api.gemini.com https://api.alternative.me http://127.0.0.1:8787 http://localhost:8787;
   frame-src https://s3.tradingview.com https://www.tradingview.com https://*.tradingview.com https://tradingview-widget.com https://*.tradingview-widget.com;
 ">
 <script src="./support.js"></script>
@@ -141,18 +141,6 @@
       </div>
     </div>
 
-    <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:18px">
-      <h2 style="margin:0 0 14px;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">BTC / ETH DOMINANCE <span style="color:#4a5568">(coingecko.com)</span></h2>
-      <div style="margin-bottom:14px">
-        <div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:13px;margin-bottom:6px"><span style="color:#f7931a;font-weight:600">BTC</span><span>{{ btcDomText }}%</span></div>
-        <div style="height:8px;background:#1a2029;border-radius:4px;overflow:hidden"><div style="height:100%;width:{{ btcDomPct }}%;background:#f7931a"></div></div>
-      </div>
-      <div>
-        <div style="display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:13px;margin-bottom:6px"><span style="color:#8c8fff;font-weight:600">ETH</span><span>{{ ethDomText }}%</span></div>
-        <div style="height:8px;background:#1a2029;border-radius:4px;overflow:hidden"><div style="height:100%;width:{{ ethDomPct }}%;background:#8c8fff"></div></div>
-      </div>
-      <div style="margin-top:16px;padding-top:14px;border-top:1px solid #1e2530;font-size:11px;color:#7b8494">Refreshes every 5 minutes · falls back to a cached estimate if the API is unreachable</div>
-    </div>
   </div>
 
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px">
@@ -243,21 +231,73 @@
     </div>
   </div>
 
-  <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px;margin-bottom:16px">
-    <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:4px 10px;margin-bottom:10px">
-      <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">AUTOMATED ALERT STREAM</h2>
-      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#4a5568">{{ alertCountText }}</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px">
+    <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
+      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:4px 10px;margin-bottom:10px">
+        <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">AUTOMATED ALERT STREAM</h2>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#4a5568">{{ alertCountText }}</div>
+      </div>
+      <div style="max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:6px">
+        <sc-for list="{{ alertRows }}" as="a" hint-placeholder-count="4">
+          <div style="display:flex;gap:10px;align-items:baseline;padding:7px 10px;background:#0d1015;border-left:3px solid {{ a.color }};border-radius:2px">
+            <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#4a5568;white-space:nowrap">{{ a.timeText }}</span>
+            <span style="font-size:10px;font-weight:700;color:{{ a.color }};text-transform:uppercase;letter-spacing:0.5px;white-space:nowrap">{{ a.type }}</span>
+            <span style="font-size:13px;color:#c7ccd6">{{ a.message }}</span>
+          </div>
+        </sc-for>
+        <sc-if value="{{ noAlerts }}">
+          <div style="text-align:center;padding:24px;color:#4a5568;font-size:12px">No signals triggered yet — scanning breakouts, crossovers, volume &amp; volatility across 10 symbols.</div>
+        </sc-if>
+      </div>
     </div>
-    <div style="max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:6px">
-      <sc-for list="{{ alertRows }}" as="a" hint-placeholder-count="4">
-        <div style="display:flex;gap:10px;align-items:baseline;padding:7px 10px;background:#0d1015;border-left:3px solid {{ a.color }};border-radius:2px">
-          <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#4a5568;white-space:nowrap">{{ a.timeText }}</span>
-          <span style="font-size:10px;font-weight:700;color:{{ a.color }};text-transform:uppercase;letter-spacing:0.5px;white-space:nowrap">{{ a.type }}</span>
-          <span style="font-size:13px;color:#c7ccd6">{{ a.message }}</span>
+
+    <!-- Grouped-liquidity pivot walls. Derived from the same top-of-book the
+         L2 ladder shows (~10-12 levels), so these are immediate passive
+         liquidity, not deep historical S/R — the subtitle says so. -->
+    <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
+      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:4px 10px;margin-bottom:4px">
+        <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">LIQUIDITY WALLS · {{ selectedLabel }}</h2>
+        <sc-if value="{{ pivotAvailable }}">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:11px;padding:2px 8px;border-radius:3px;color:{{ pivotSpreadColor }};background:{{ pivotSpreadBg }}">
+            SPREAD {{ pivotSpreadText }} · {{ pivotSpreadLabel }}
+          </div>
+        </sc-if>
+      </div>
+      <div style="font-size:10px;color:#4a5568;margin-bottom:12px">Grouped resting liquidity across the visible book · R3/S3 hold until matched</div>
+
+      <sc-if value="{{ pivotAvailable }}">
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <sc-for list="{{ resistanceRows }}" as="r" hint-placeholder-count="3">
+            <div style="position:relative;display:flex;align-items:baseline;gap:10px;padding:6px 10px;border-radius:3px;background:{{ r.bg }};overflow:hidden">
+              <div aria-hidden="true" style="position:absolute;left:0;top:0;bottom:0;width:{{ r.widthPct }}%;background:{{ r.color }};opacity:0.13"></div>
+              <span style="position:relative;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:{{ r.color }};width:24px">{{ r.tag }}</span>
+              <span style="position:relative;font-family:'JetBrains Mono',monospace;font-size:13px;color:#eef1f5;flex:1">{{ r.price }}</span>
+              <span style="position:relative;font-family:'JetBrains Mono',monospace;font-size:11px;color:#7b8494">{{ r.qty }}</span>
+              <span style="position:relative;font-size:9px;color:#4a5568;width:104px;text-align:right">{{ r.note }}</span>
+            </div>
+          </sc-for>
         </div>
-      </sc-for>
-      <sc-if value="{{ noAlerts }}">
-        <div style="text-align:center;padding:24px;color:#4a5568;font-size:12px">No signals triggered yet — scanning breakouts, crossovers, volume &amp; volatility across 10 symbols.</div>
+
+        <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin:10px 0;padding:8px;border-top:1px solid #1e2530;border-bottom:1px solid #1e2530">
+          <span aria-hidden="true" style="font-size:14px;color:{{ midTickColor }}">{{ midTickArrow }}</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;color:{{ midTickColor }}">{{ midPriceText }}</span>
+          <span style="font-size:10px;color:#4a5568;letter-spacing:0.5px">MID</span>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <sc-for list="{{ supportRows }}" as="r" hint-placeholder-count="3">
+            <div style="position:relative;display:flex;align-items:baseline;gap:10px;padding:6px 10px;border-radius:3px;background:{{ r.bg }};overflow:hidden">
+              <div aria-hidden="true" style="position:absolute;left:0;top:0;bottom:0;width:{{ r.widthPct }}%;background:{{ r.color }};opacity:0.13"></div>
+              <span style="position:relative;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;color:{{ r.color }};width:24px">{{ r.tag }}</span>
+              <span style="position:relative;font-family:'JetBrains Mono',monospace;font-size:13px;color:#eef1f5;flex:1">{{ r.price }}</span>
+              <span style="position:relative;font-family:'JetBrains Mono',monospace;font-size:11px;color:#7b8494">{{ r.qty }}</span>
+              <span style="position:relative;font-size:9px;color:#4a5568;width:104px;text-align:right">{{ r.note }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+      <sc-if value="{{ pivotUnavailable }}">
+        <div style="display:flex;align-items:center;justify-content:center;text-align:center;padding:36px 12px;color:#4a5568;font-size:12px">Liquidity walls are derived from the live L2 book — crypto pairs only. Select BTC/USD or ETH/USD to view them.</div>
       </sc-if>
     </div>
   </div>
@@ -476,13 +516,17 @@ class Component extends DCLogic {
       clockText: '--:--:--',
       wsStatus: 'connecting',
       bids: [], asks: [], mid: null, spread: null,
+      // Pivot walls + mid tick. askPivots/bidPivots carry the frozen level3
+      // and sticky level2 between book updates; see pivotLevels.js.
+      askPivots: { level1: null, level2: null, level3: null },
+      bidPivots: { level1: null, level2: null, level3: null },
+      midTick: 'flat',
       indicatorSnapshot: null,
       mtf: {},
       alerts: [],
       correlation: { headers: [], rows: [] },
       anomalies: 0,
       fng: { value: '--', label: 'loading' },
-      dominance: { btc: 52, eth: 17 },
       widgetErrors: { chart: false, heatmap: false, calendar: false, news: false },
       heatmapTab: 'fx',
       dataSource: 'sim',
@@ -499,6 +543,7 @@ class Component extends DCLogic {
     this.attemptWithFailover = attemptWithFailover;
     const { isMarketOpen } = await import('./marketHours.js');
     this.isMarketOpen = isMarketOpen;
+    this.pivots = await import('./pivotLevels.js');
     this.cryptoActiveId = PROVIDERS[0].id;
     this.clockTimer = setInterval(() => this.setState({ clockText: new Date().toISOString().substr(11, 8) }), 1000);
     this.fetchGlobalMetrics();
@@ -560,12 +605,6 @@ class Component extends DCLogic {
     } catch (e) {
       this.setState(s => ({ fng: { value: s.fng.value === '--' ? 50 : s.fng.value, label: 'unavailable' } }));
     }
-    try {
-      const r = await fetch('https://api.coingecko.com/api/v3/global');
-      const j = await r.json();
-      const p = j.data.market_cap_percentage;
-      this.setState({ dominance: { btc: p.btc, eth: p.eth } });
-    } catch (e) { /* keep last known / seeded estimate */ }
   }
 
   // Both macro/news panels go through the proxy (FRED and NewsAPI both
@@ -885,7 +924,19 @@ class Component extends DCLogic {
 
   changeSymbol(id) {
     if (id === this.state.symbol) return;
-    this.setState({ symbol: id, indicatorSnapshot: this.buildSnapshot(this.cache[id]), bids: [], asks: [] });
+    this.pivotState = { asks: {}, bids: {} };
+    this.pivotKey = null;
+    this.prevMid = null;
+    this.setState({
+      symbol: id, indicatorSnapshot: this.buildSnapshot(this.cache[id]), bids: [], asks: [],
+      // mid/spread belong to the previous symbol's book — clearing bids/asks
+      // without these left the old figures on screen (e.g. BTC's 0.10 spread
+      // shown against EUR/USD, which has no L2 book at all).
+      mid: null, spread: null,
+      askPivots: { level1: null, level2: null, level3: null },
+      bidPivots: { level1: null, level2: null, level3: null },
+      midTick: 'flat',
+    });
     this.loadMTF(id);
     this.connectWS(id);
     this.mountChart(id);
@@ -998,7 +1049,29 @@ class Component extends DCLogic {
       const asks = (b.asks || []).slice(0, 12);
       const mid = bids[0] && asks[0] ? (bids[0][0] + asks[0][0]) / 2 : null;
       const spread = bids[0] && asks[0] ? asks[0][0] - bids[0][0] : null;
-      this.setState({ bids, asks, mid, spread });
+
+      // Frozen pivot levels only mean anything within one continuous book:
+      // a different symbol, or the same symbol re-subscribed on another
+      // exchange after failover, is a different liquidity picture entirely.
+      // Reset on either rather than carrying a stale wall across.
+      const pivotKey = `${symbolId}|${this.cryptoActiveId}`;
+      if (this.pivotKey !== pivotKey) {
+        this.pivotKey = pivotKey;
+        this.pivotState = { asks: {}, bids: {} };
+      }
+      let askPivots = this.state.askPivots, bidPivots = this.state.bidPivots, midTick = this.state.midTick;
+      if (this.pivots) {
+        this.pivotState = this.pivotState || { asks: {}, bids: {} };
+        askPivots = this.pivots.computePivots(asks, this.pivotState.asks);
+        bidPivots = this.pivots.computePivots(bids, this.pivotState.bids);
+        this.pivotState = { asks: askPivots, bids: bidPivots };
+        midTick = this.pivots.tickDirection(mid, this.prevMid);
+        // Only advance the reference once the mid actually moves, so a run of
+        // identical books doesn't wash the colour back to flat immediately.
+        if (mid != null && mid !== this.prevMid) this.prevMid = mid;
+        else if (this.prevMid == null) this.prevMid = mid;
+      }
+      this.setState({ bids, asks, mid, spread, askPivots, bidPivots, midTick });
     }, 100);
   }
 
@@ -1185,6 +1258,62 @@ class Component extends DCLogic {
       : selMarketOpen ? '● LIVE DATA' : '◐ LAST CLOSE · MARKET CLOSED';
     const dataSourceColor = !dataIsReal ? '#7b8494' : selMarketOpen ? '#34d399' : '#fbbf24';
 
+    // ---- Pivot wall card -------------------------------------------------
+    const px = (v) => v == null ? '--' : v.toFixed(sym.base > 1000 ? 1 : 5);
+    const qt = (v) => v == null ? '--' : v.toFixed(4);
+    // R = resistance (asks, above mid), S = support (bids, below mid).
+    // Rendered strongest-first so the frozen wall reads at the top.
+    const pivotMax = {
+      r: (s.askPivots.level3 || {}).qty || 0,
+      s: (s.bidPivots.level3 || {}).qty || 0,
+    };
+    const pivotRow = (tag, lvl, kind, note) => ({
+      tag,
+      price: lvl ? px(lvl.price) : '--',
+      qty: lvl ? qt(lvl.qty) : '--',
+      note,
+      color: kind === 'r' ? '#f87171' : '#34d399',
+      bg: lvl ? (kind === 'r' ? 'rgba(248,113,113,0.09)' : 'rgba(52,211,153,0.09)') : 'transparent',
+      // Bar is scaled against the frozen strongest wall on the same side, so
+      // the three rows are visually comparable to each other.
+      widthPct: lvl && pivotMax[kind] ? Math.max(4, Math.min(100, (lvl.qty / pivotMax[kind]) * 100)) : 0,
+    });
+    const FROZEN = 'strongest · frozen';
+    const HALF = 'updates at 50% of R3';
+    const DYN = 'live';
+    const resistanceRows = [
+      pivotRow('R3', s.askPivots.level3, 'r', FROZEN),
+      pivotRow('R2', s.askPivots.level2, 'r', HALF),
+      pivotRow('R1', s.askPivots.level1, 'r', DYN),
+    ];
+    const supportRows = [
+      pivotRow('S3', s.bidPivots.level3, 's', FROZEN),
+      pivotRow('S2', s.bidPivots.level2, 's', HALF.replace('R3', 'S3')),
+      pivotRow('S1', s.bidPivots.level1, 's', DYN),
+    ];
+
+    const tickMap = {
+      up:   { color: '#34d399', arrow: '▲' },
+      down: { color: '#f87171', arrow: '▼' },
+      flat: { color: '#eef1f5', arrow: '·' },
+    };
+    const tick = tickMap[s.midTick] || tickMap.flat;
+    const midTickColor = tick.color;
+    const midTickArrow = tick.arrow;
+    const midPriceText = s.mid != null ? px(s.mid) : '--';
+
+    const tier = this.pivots ? this.pivots.spreadTier(s.spread, s.mid) : 'unknown';
+    const spreadStyle = {
+      tight:    { color: '#34d399', bg: 'rgba(52,211,153,0.14)', label: 'TIGHT' },
+      widening: { color: '#fbbf24', bg: 'rgba(251,191,36,0.16)', label: 'WIDENING' },
+      wide:     { color: '#f87171', bg: 'rgba(248,113,113,0.18)', label: 'WIDE' },
+      unknown:  { color: '#7b8494', bg: 'rgba(123,132,148,0.10)', label: '—' },
+    }[tier];
+    const pivotSpreadText = s.spread != null ? s.spread.toFixed(sym.base > 1000 ? 2 : 5) : '--';
+    const pivotSpreadColor = spreadStyle.color;
+    const pivotSpreadBg = spreadStyle.bg;
+    const pivotSpreadLabel = spreadStyle.label;
+
     return {
       wsDotColor: wsStatusColor, wsStatusColor, wsStatusText: wsTextMap[s.wsStatus] || 'OFFLINE',
       wsOffline: s.wsStatus === 'offline', reconnectWS: () => this.manualReconnectWS(),
@@ -1194,12 +1323,10 @@ class Component extends DCLogic {
       sentimentNeedleDeg, sentimentColor, sentimentLabel, sentimentScore: clamped,
       sentimentAriaLabel: `Market sentiment: ${sentimentLabel}, composite score ${clamped} of 100`,
       fngValue, fngLabel, fngColor, taAggLabel, taAggColor,
-      // Guarded for the same reason as indicatorRows: CoinGecko's
-      // market_cap_percentage is only spread into state on a successful
-      // fetch, but a 200 with an unexpected shape would leave these
-      // undefined and .toFixed() would take the whole render down.
-      btcDomText: fx1(s.dominance.btc), btcDomPct: Math.min(100, s.dominance.btc || 0),
-      ethDomText: fx1(s.dominance.eth), ethDomPct: Math.min(100, (s.dominance.eth || 0) * 2),
+      resistanceRows, supportRows,
+      midPriceText, midTickColor, midTickArrow,
+      pivotSpreadText, pivotSpreadColor, pivotSpreadBg, pivotSpreadLabel,
+      pivotAvailable: isCrypto, pivotUnavailable: !isCrypto,
       chartRef: this.chartRef, heatmapRef: this.heatmapRef, calendarRef: this.calendarRef, newsRef: this.newsRef,
       widgetErrors: s.widgetErrors,
       retryChart: () => this.mountChart(), retryHeatmap: () => this.mountHeatmap(), retryCalendar: () => this.mountCalendar(), retryNews: () => this.mountNews(),

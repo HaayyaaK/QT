@@ -1,0 +1,103 @@
+// Dynamic pivot levels (R1/R2/R3 on asks, S1/S2/S3 on bids) derived from
+// grouped order-book liquidity, plus the mid-price tick and spread-width
+// classification that the pivot card renders alongside them.
+//
+// Scope note: this runs over whatever depth the providers already supply
+// (~10-12 levels per side, roughly a $4 band on BTC). That is a deliberate
+// stability-over-reach choice — deepening the book would mean local
+// order-book maintenance on Binance's diff stream and re-validating the
+// failover chain. So these levels describe *immediate passive liquidity*
+// within the top of book, not deep historical support/resistance. The card
+// labels them accordingly.
+
+// Collapse a side of the book into price buckets and sum the quantity in
+// each. Bucket width is derived from the side's own price span rather than
+// hardcoded, so the same code works for BTC at ~$63,000 and ETH at ~$3,200
+// without a per-symbol tick table.
+//
+// Each bucket reports the price of its single largest resting order rather
+// than the bucket's midpoint: that is the price a trader would actually see
+// the wall sitting at.
+export function groupLevels(levels, bucketCount = 8) {
+  const clean = (levels || []).filter(
+    (l) => Array.isArray(l) && Number.isFinite(l[0]) && Number.isFinite(l[1]) && l[1] > 0
+  );
+  if (!clean.length) return [];
+  const prices = clean.map((l) => l[0]);
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const width = (max - min) / bucketCount;
+  if (!(width > 0)) {
+    // Every level at one price — a single wall, not a distribution.
+    return [{ price: min, qty: clean.reduce((s, l) => s + l[1], 0) }];
+  }
+  const buckets = new Map();
+  for (const [price, qty] of clean) {
+    const idx = Math.min(bucketCount - 1, Math.floor((price - min) / width));
+    const b = buckets.get(idx) || { qty: 0, topPrice: price, topQty: -1 };
+    b.qty += qty;
+    if (qty > b.topQty) { b.topQty = qty; b.topPrice = price; }
+    buckets.set(idx, b);
+  }
+  return [...buckets.values()]
+    .map((b) => ({ price: b.topPrice, qty: b.qty }))
+    .sort((a, b) => b.qty - a.qty || a.price - b.price);
+}
+
+// Apply the three persistence rules to one side of the book.
+//
+//   level3 — the strongest wall seen this session. Frozen: only replaced when
+//            a new grouped quantity *reaches or exceeds* it. A weaker book
+//            leaves it untouched, so it can point at a price whose liquidity
+//            has since been consumed. That is the specified behaviour.
+//   level2 — updates whenever some other bucket reaches 50% of level3's size.
+//            Retains its previous value when nothing qualifies.
+//   level1 — fully dynamic: the largest remaining bucket, recomputed every
+//            update, excluding whatever level2/level3 already occupy.
+//
+// `prev` is the same shape this returns, so callers just feed the last result
+// back in. Pure — the caller owns when to reset (see resetKey in the card).
+export function computePivots(levels, prev = {}, opts = {}) {
+  const groups = groupLevels(levels, opts.bucketCount);
+  if (!groups.length) return { level1: null, level2: prev.level2 || null, level3: prev.level3 || null };
+
+  const strongest = groups[0];
+  let level3 = prev.level3 || null;
+  if (!level3 || strongest.qty >= level3.qty) level3 = { price: strongest.price, qty: strongest.qty };
+
+  const threshold = level3.qty * 0.5;
+  let level2 = prev.level2 || null;
+  const candidate2 = groups.find((g) => g.price !== level3.price && g.qty >= threshold);
+  if (candidate2) level2 = { price: candidate2.price, qty: candidate2.qty };
+
+  const candidate1 = groups.find(
+    (g) => g.price !== level3.price && (!level2 || g.price !== level2.price)
+  );
+  const level1 = candidate1 ? { price: candidate1.price, qty: candidate1.qty } : null;
+
+  return { level1, level2, level3 };
+}
+
+// Mid-price tick direction. Deliberately derived from the book's own mid
+// rather than a trade feed: none of the four providers subscribe to a trade
+// channel, and adding one (Gemini has no WebSocket at all today) would mean
+// touching the failover path. So this reports "the mid moved", which is what
+// the colour is documented to mean.
+export function tickDirection(mid, prevMid) {
+  if (mid == null || prevMid == null) return 'flat';
+  if (mid > prevMid) return 'up';
+  if (mid < prevMid) return 'down';
+  return 'flat';
+}
+
+// Spread width as a fraction of mid, bucketed for colour. Relative rather
+// than absolute so one set of thresholds covers every symbol.
+export const SPREAD_TIERS = { tight: 1, widening: 5 }; // basis points
+
+export function spreadTier(spread, mid) {
+  if (spread == null || !Number.isFinite(spread) || !mid) return 'unknown';
+  const bps = (spread / mid) * 10000;
+  if (bps < SPREAD_TIERS.tight) return 'tight';
+  if (bps < SPREAD_TIERS.widening) return 'widening';
+  return 'wide';
+}
