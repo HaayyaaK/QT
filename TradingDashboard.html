@@ -461,7 +461,7 @@ class Component extends DCLogic {
     // Finance server-side to sidestep its browser CORS block.
     // Dev (Live Server on localhost/127.0.0.1): the proxy has no site in
     // front of it, so it's called directly on its own port.
-    // Production (served from forex.hayyaak.com / trade.hayyaak.com /
+    // Production (served from forex.hayyaak.com / fx.hayyaak.com /
     // hayyaak.trade via IIS): same-origin relative path — web.config's ARR
     // rule reverse-proxies /api/* to the local proxy process over
     // loopback-only (server.js binds 127.0.0.1, never exposed directly),
@@ -749,7 +749,12 @@ class Component extends DCLogic {
       const r = results[i];
       if (r.status !== 'fulfilled') return;
       this.cache[sym.id] = r.value;
-      allAlerts.push(...this.detectAlerts(sym, r.value));
+      // Alerts are trading signals — only ever derive them from live data.
+      // r.value.source === 'sim' means the real feed (proxy/exchange) was
+      // unavailable (e.g. FX market closed and the provider had nothing to
+      // return) and this is a synthetic random-walk fallback; treating its
+      // moves as real breakouts/crossovers would fire false signals.
+      if (r.value.source === 'live') allAlerts.push(...this.detectAlerts(sym, r.value));
     });
     const returns = {};
     this.symbols.forEach(s => { returns[s.id] = ta.pctChanges((this.cache[s.id] || {}).closes || []); });
@@ -1080,15 +1085,18 @@ class Component extends DCLogic {
     const sentimentColor = clamped > 60 ? '#34d399' : clamped < 40 ? '#f87171' : '#fbbf24';
     const sentimentNeedleDeg = -90 + (clamped / 100) * 180;
 
+    const fx1 = (v) => v == null ? '—' : v.toFixed(1);
+    const fx2 = (v) => v == null ? '—' : v.toFixed(2);
+    const fx3 = (v) => v == null ? '—' : v.toFixed(3);
     const indicatorRows = this.memo('indicatorRows', snap, () => snap ? [
-      { name: 'RSI (14)', value: snap.rsi.toFixed(1), signal: snap.rsi > 70 ? 'Overbought' : snap.rsi < 30 ? 'Oversold' : 'Neutral', color: snap.rsi > 70 ? '#f87171' : snap.rsi < 30 ? '#34d399' : '#7b8494' },
-      { name: 'MACD (12,26,9)', value: snap.macdH.toFixed(3), signal: snap.macdH > 0 ? 'Bullish' : 'Bearish', color: snap.macdH > 0 ? '#34d399' : '#f87171' },
-      { name: 'EMA 20/50/200', value: snap.e20.toFixed(2), signal: snap.close > snap.e20 && snap.e20 > snap.e50 ? 'Bullish' : snap.close < snap.e20 && snap.e20 < snap.e50 ? 'Bearish' : 'Mixed', color: snap.close > snap.e20 && snap.e20 > snap.e50 ? '#34d399' : snap.close < snap.e20 && snap.e20 < snap.e50 ? '#f87171' : '#fbbf24' },
-      { name: 'VWAP', value: snap.vwap.toFixed(2), signal: snap.close > snap.vwap ? 'Bullish' : 'Bearish', color: snap.close > snap.vwap ? '#34d399' : '#f87171' },
-      { name: 'Bollinger (20,2)', value: snap.close.toFixed(2), signal: snap.close > snap.bbUpper ? 'Overbought' : snap.close < snap.bbLower ? 'Oversold' : 'Inside bands', color: snap.close > snap.bbUpper ? '#f87171' : snap.close < snap.bbLower ? '#34d399' : '#7b8494' },
-      { name: 'ATR (14)', value: snap.atr.toFixed(3), signal: 'Volatility', color: '#60a5fa' },
-      { name: 'ADX (14)', value: snap.adx.toFixed(1), signal: snap.adx > 25 ? 'Trending' : 'Ranging', color: snap.adx > 25 ? '#60a5fa' : '#7b8494' },
-      { name: 'Stochastic (14,3,3)', value: snap.stochK.toFixed(1), signal: snap.stochK > 80 ? 'Overbought' : snap.stochK < 20 ? 'Oversold' : 'Neutral', color: snap.stochK > 80 ? '#f87171' : snap.stochK < 20 ? '#34d399' : '#7b8494' },
+      { name: 'RSI (14)', value: fx1(snap.rsi), signal: snap.rsi > 70 ? 'Overbought' : snap.rsi < 30 ? 'Oversold' : 'Neutral', color: snap.rsi > 70 ? '#f87171' : snap.rsi < 30 ? '#34d399' : '#7b8494' },
+      { name: 'MACD (12,26,9)', value: fx3(snap.macdH), signal: snap.macdH > 0 ? 'Bullish' : 'Bearish', color: snap.macdH > 0 ? '#34d399' : '#f87171' },
+      { name: 'EMA 20/50/200', value: fx2(snap.e20), signal: snap.close > snap.e20 && snap.e20 > snap.e50 ? 'Bullish' : snap.close < snap.e20 && snap.e20 < snap.e50 ? 'Bearish' : 'Mixed', color: snap.close > snap.e20 && snap.e20 > snap.e50 ? '#34d399' : snap.close < snap.e20 && snap.e20 < snap.e50 ? '#f87171' : '#fbbf24' },
+      { name: 'VWAP', value: fx2(snap.vwap), signal: snap.close > snap.vwap ? 'Bullish' : 'Bearish', color: snap.close > snap.vwap ? '#34d399' : '#f87171' },
+      { name: 'Bollinger (20,2)', value: fx2(snap.close), signal: snap.close > snap.bbUpper ? 'Overbought' : snap.close < snap.bbLower ? 'Oversold' : 'Inside bands', color: snap.close > snap.bbUpper ? '#f87171' : snap.close < snap.bbLower ? '#34d399' : '#7b8494' },
+      { name: 'ATR (14)', value: fx3(snap.atr), signal: 'Volatility', color: '#60a5fa' },
+      { name: 'ADX (14)', value: fx1(snap.adx), signal: snap.adx > 25 ? 'Trending' : 'Ranging', color: snap.adx > 25 ? '#60a5fa' : '#7b8494' },
+      { name: 'Stochastic (14,3,3)', value: fx1(snap.stochK), signal: snap.stochK > 80 ? 'Overbought' : snap.stochK < 20 ? 'Oversold' : 'Neutral', color: snap.stochK > 80 ? '#f87171' : snap.stochK < 20 ? '#34d399' : '#7b8494' },
     ] : []);
 
     const mtfRows = this.memo('mtfRows', s.mtf, () => ['5m', '15m', '1h', '4h', '1D'].map(label => {

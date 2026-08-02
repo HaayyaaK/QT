@@ -1,7 +1,9 @@
 # Project Status
 
-**Last tested:** 2026-08-01, via Claude Code + Chrome (claude-in-chrome extension), local static
-serve at `http://127.0.0.1:5500/TradingDashboard.html` (`python -m http.server`).
+**Last tested:** 2026-08-02, via Claude Code + Brave (claude-in-chrome extension), production IIS
+deployment at `https://fx.hayyaak.com/TradingDashboard.html` (see "Live drift rate" below).
+Prior pass: 2026-08-01, local static serve at `http://127.0.0.1:5500/TradingDashboard.html`
+(`python -m http.server`).
 
 **Current commit:** `0ab4020` — "Fix crypto failover flapping, double-mount on load, and add
 Kraken book checksum validation" (working tree clean at time of writing).
@@ -31,23 +33,30 @@ Kraken book checksum validation" (working tree clean at time of writing).
 | 2 | Double WebSocket connection on every page load | Gated `support.js`'s self-fetch/`updateHtml` behind `window.parent !== window` | Two independent fresh reloads, each showed exactly one `Connected to Kraken` / one proxy warning |
 | 3 | Crossed order book (negative spread) reproduced on a single, never-interrupted connection | CRC-32 checksum validation against Kraken's real book-channel checksum; reconnects on mismatch | Real organic mismatches caught and cleanly recovered during testing; synthetic wrong-checksum injection also correctly detected; formula validated against live data with a controlled reconnect-based probe (23/23 detected drifts, zero repeat-mismatches after resync — confirms the formula itself, not just drift detection, is correct) |
 
-## Open item: live drift rate
+## Live drift rate — measured on production host (2026-08-02)
 
-Measuring the Kraken checksum validator in isolation (a plain Node script against the real
-Kraken WebSocket, no browser/app overhead), genuine local-state drift occurred roughly **once
-every 10-15 seconds**. This is higher than "rare packet loss" would suggest, but every single
-detected drift resynced cleanly with no false positives and no repeat-mismatch immediately
-after reconnecting — so the *mechanism* is confirmed correct; what's still open is whether
-10-15s is normal for this specific network path (dev machine, current network conditions) or
-something that changes on the production host.
+Deployed to IIS on the hosting device (`QuantTerminal` site, `fx.hayyaak.com`, proxied through
+Cloudflare) and watched the console for `[WARN] Kraken book checksum mismatch` over a
+continuous ~14.5-minute window in Brave.
 
-**This does not need to block deployment.** `bookFailCount` resets on every successful
-reconnect, so even at this rate it manifests as a brief, mostly-invisible resync rather than a
-failover cascade. It's a measurement to take once running on the target host, not a
-pre-deployment gate.
+**Result: zero checksum mismatches**, versus the ~1-per-10-15s rate measured on the dev
+machine's network path. This strongly suggests the dev-network path itself was the driver of
+the drift rate, not something inherent to the delta stream — the checksum mechanism was never
+even exercised in this run because the local book stayed in sync the whole time.
+
+Other things re-confirmed during the same session:
+- No double-connect on page load (single `Connected to Kraken` at load) — commit `0ab4020`'s
+  fix holds on production.
+- Order book, depth chart, sentiment/dominance panels, and the TradingView chart all rendered
+  and updated continuously throughout with no visible hiccups.
+- A `[INFO] Connected to Kraken` line reappeared roughly every ~7 minutes (2 occurrences after
+  the initial load, evenly spaced) with no preceding warning or error — reads as an
+  intentional periodic resubscribe rather than a fault, since no checksum warning, no visible
+  order-book disruption, and no repeated pattern deviation accompanied it. Not yet root-caused
+  in the code; worth a deliberate look if it recurs at exactly ~7min in a future longer soak.
 
 ## Next step
 
-Deploy to the IIS host (see `DEPLOYMENT.md`), load the dashboard there, and watch the console
-for `[WARN] Kraken book checksum mismatch` frequency over a sustained window (10-15 minutes is
-plenty). Compare against the ~10-15s dev-machine rate above.
+Longer soak (60+ minutes) would help confirm whether checksum mismatches are simply rarer in
+production or effectively absent, and would clarify whether the ~7-minute periodic reconnect is
+a deliberate interval somewhere in `cryptoProviders.js`/`support.js` or coincidental.

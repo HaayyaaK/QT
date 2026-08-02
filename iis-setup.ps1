@@ -1,4 +1,4 @@
-<#
+﻿<#
   One-time IIS setup for the Quant/Terminal dashboard.
 
   Run this yourself in an elevated PowerShell (Run as Administrator) —
@@ -32,8 +32,8 @@ $ErrorActionPreference = 'Stop'
 
 $siteName     = 'QuantTerminal'
 $poolName     = 'QuantTerminalPool'
-$physicalPath = 'C:\inetpub\wwwroot\projects\hayyaak_trading_dc'
-$hostnames    = @('forex.hayyaak.com', 'trade.hayyaak.com', 'hayyaak.trade')
+$physicalPath = 'C:\inetpub\wwwroot\projects\hayyaak_QT'
+$hostnames    = @('fx.hayyaak.com')
 
 Import-Module WebAdministration
 
@@ -52,7 +52,7 @@ if (-not (Test-Path "IIS:\Sites\$siteName")) {
     New-Website -Name $siteName -PhysicalPath $physicalPath -ApplicationPool $poolName `
         -HostHeader $hostnames[0] -Port 80 | Out-Null
     Write-Host "Created site '$siteName' bound to $($hostnames[0])."
-    foreach ($h in $hostnames[1..($hostnames.Count - 1)]) {
+    foreach ($h in ($hostnames | Select-Object -Skip 1)) {
         New-WebBinding -Name $siteName -Protocol http -Port 80 -HostHeader $h
         Write-Host "Added binding for $h."
     }
@@ -85,5 +85,5 @@ if (-not $proxyEnabled -or $proxyEnabled.Value -ne $true) {
 Write-Host ""
 Write-Host "Done. Verify with: & 'C:\Windows\System32\inetsrv\appcmd.exe' list site `"$siteName`""
 Write-Host "Then, with the proxy running (cd C:\proxy-server; npm start), test from this machine:"
-Write-Host "  curl.exe -H `"Host: forex.hayyaak.com`" http://127.0.0.1/api/fx/klines?symbol=EURUSD"
+Write-Host "  curl.exe -H `"Host: fx.hayyaak.com`" http://127.0.0.1/api/fx/klines?symbol=EURUSD"
 Write-Host "That confirms IIS -> ARR -> the Node proxy end-to-end, independent of DNS/Cloudflare."

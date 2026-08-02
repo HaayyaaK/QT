@@ -272,7 +272,7 @@ The proxy has its own separate test suite — see its README.
 
 ## Production deployment (IIS)
 
-Target hostnames: `forex.hayyaak.com`, `trade.hayyaak.com`, `hayyaak.trade`.
+Target hostnames: `forex.hayyaak.com`, `fx.hayyaak.com`, `hayyaak.trade`.
 Two files make this work, both in this repo:
 
 - **`web.config`** — IIS config for this site: default document
@@ -300,7 +300,7 @@ Two files make this work, both in this repo:
 |---|---|
 | `forex.hayyaak.com` DNS | ✅ resolves (Cloudflare IPs, same pattern as `hayyaak.com`) |
 | `hayyaak.trade` DNS | ✅ resolves (Cloudflare IPs, different zone) |
-| `trade.hayyaak.com` DNS | ❌ **no DNS record at all** — add it wherever `hayyaak.com`'s other records live (likely Cloudflare) before this hostname can work |
+| `fx.hayyaak.com` DNS | ✅ resolves via Cloudflare |
 | Cloudflare → this machine routing | ❓ unverified — DNS resolving to Cloudflare only confirms Cloudflare is the edge, not that these hostnames are proxied to *this* origin. Check in the Cloudflare dashboard. |
 | Cloudflare SSL/TLS mode | ❓ unverified — if it's "Flexible", the http-only IIS bindings `iis-setup.ps1` creates are correct as-is. If "Full"/"Full (strict)", this box needs its own certificate bound to real HTTPS bindings, which `iis-setup.ps1` does not create. |
 | Router/firewall reaching this box on 80/443 | ❓ unverified — can't be checked from inside the machine |
