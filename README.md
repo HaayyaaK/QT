@@ -407,3 +407,13 @@ moving this repo + the proxy to a hosting device.
    (Google Fonts genuinely can't — it's per-UA-negotiated; TradingView's
    embed scripts could, in principle, but they're versioned by TradingView,
    not pinned by us).
+7. **Market holidays are not modelled.** `marketHours.js` gates the alert
+   stream on weekly session hours and handles DST correctly, but knows
+   nothing about Good Friday, Christmas, Thanksgiving, or any other market
+   holiday. On those days FX and XAU/USD are closed while the calendar still
+   reports them open, so the alert stream can fire signals derived from the
+   previous session's static candles — the same class of false signal that
+   weekly gating fixes for weekends. The "◐ LAST CLOSE · MARKET CLOSED"
+   indicator is subject to the same gap and will read "● LIVE DATA" on a
+   holiday. Tracked as a follow-up; fixed-date and Easter-relative holiday
+   tables are the remaining work.

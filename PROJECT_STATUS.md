@@ -105,5 +105,16 @@ After the fix, the same production dashboard shows `0 SIGNALS` in the same windo
   far as: no client-side reconnect timer exists in `cryptoProviders.js` or
   `TradingDashboard.html`, so it originates server-side (Kraken idle timeout) or at an
   intermediate hop. Recovery is clean either way.
-- **Holiday calendars are not modelled.** `marketHours.js` handles weekly sessions and DST but
-  not Good Friday, Christmas, or other market holidays — alerts can still fire on those days.
+- **Backlog: holiday calendars.** `marketHours.js` handles weekly sessions and DST but not Good
+  Friday, Christmas, or other market holidays — alerts can still fire on those days, and the
+  data-source indicator will read "● LIVE DATA" rather than "◐ LAST CLOSE". Deliberately out of
+  scope for this release (weekly gating removes the large majority of the noise); documented
+  user-facing in README "Known limitations" #7. Remaining work is fixed-date plus
+  Easter-relative holiday tables per venue.
+- **Watch post-deploy: `alertFlags` across a session boundary.** The gate returns early without
+  writing `alertFlags`, so flags stay frozen at the last open-market evaluation. Analysis says
+  this is correct — alert conditions are pure functions of the candle array, which does not
+  change while the venue is shut, so there is no state to drift. The first evaluation after
+  reopen therefore compares Monday's conditions against Friday's flags, which is exactly the
+  intended "has this changed since we last really looked?" semantics. Worth confirming against a
+  real weekend boundary anyway.
