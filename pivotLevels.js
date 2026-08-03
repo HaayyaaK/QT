@@ -44,36 +44,81 @@ export function groupLevels(levels, bucketCount = 8) {
     .sort((a, b) => b.qty - a.qty || a.price - b.price);
 }
 
+// Default grouping granularity, and the coarser fallback used when the fine
+// pass finds no second wall. Fewer buckets means wider price windows, which
+// aggregates adjacent resting orders that individually miss the threshold.
+export const DEFAULT_BUCKETS = 8;
+export const COARSE_BUCKETS = 4;
+export const LEVEL2_RATIO = 0.5;
+
+function bestQualifying(groups, excludePrice, threshold) {
+  return groups.find((g) => g.price !== excludePrice && g.qty >= threshold) || null;
+}
+
 // Apply the three persistence rules to one side of the book.
 //
 //   level3 — the strongest wall seen this session. Frozen: only replaced when
 //            a new grouped quantity *reaches or exceeds* it. A weaker book
 //            leaves it untouched, so it can point at a price whose liquidity
 //            has since been consumed. That is the specified behaviour.
-//   level2 — updates whenever some other bucket reaches 50% of level3's size.
-//            Retains its previous value when nothing qualifies.
+//   level2 — the 50%-of-level3 wall. See the resolution order below.
 //   level1 — fully dynamic: the largest remaining bucket, recomputed every
 //            update, excluding whatever level2/level3 already occupy.
 //
+// level2 resolution, in order — the first three preserve the original
+// semantics exactly; only the fourth is new:
+//
+//   1. A bucket at the normal granularity clearing 50% of level3.
+//   2. Failing that, re-group into wider price windows and look again. A
+//      thin book often has its second wall spread across neighbouring ticks
+//      that only clear the threshold once aggregated, so this finds real
+//      walls the fine pass splits apart rather than inventing one.
+//   3. Failing that, retain a previously *qualified* level2, exactly as
+//      before — a genuine wall is never downgraded by a quiet moment.
+//   4. Failing that, surface the strongest remaining bucket flagged
+//      `qualified: false`, so the row shows the runner-up and says it is
+//      under threshold instead of rendering an unexplained blank.
+//
+// Only a book with a single bucket — nothing to be runner-up — yields null,
+// which the card renders as an explicit "no second wall" state.
+//
 // `prev` is the same shape this returns, so callers just feed the last result
-// back in. Pure — the caller owns when to reset (see resetKey in the card).
+// back in. Pure — the caller owns when to reset (see the pivot key in the
+// dashboard's book flush).
 export function computePivots(levels, prev = {}, opts = {}) {
-  const groups = groupLevels(levels, opts.bucketCount);
-  if (!groups.length) return { level1: null, level2: prev.level2 || null, level3: prev.level3 || null };
+  const fine = groupLevels(levels, opts.bucketCount || DEFAULT_BUCKETS);
+  if (!fine.length) return { level1: null, level2: prev.level2 || null, level3: prev.level3 || null };
 
-  const strongest = groups[0];
+  const strongest = fine[0];
   let level3 = prev.level3 || null;
   if (!level3 || strongest.qty >= level3.qty) level3 = { price: strongest.price, qty: strongest.qty };
 
-  const threshold = level3.qty * 0.5;
-  let level2 = prev.level2 || null;
-  const candidate2 = groups.find((g) => g.price !== level3.price && g.qty >= threshold);
-  if (candidate2) level2 = { price: candidate2.price, qty: candidate2.qty };
+  const threshold = level3.qty * LEVEL2_RATIO;
 
-  const candidate1 = groups.find(
+  let candidate = bestQualifying(fine, level3.price, threshold);
+  let widened = false;
+  if (!candidate) {
+    const coarse = groupLevels(levels, opts.coarseBucketCount || COARSE_BUCKETS);
+    candidate = bestQualifying(coarse, level3.price, threshold);
+    widened = !!candidate;
+  }
+
+  let level2;
+  if (candidate) {
+    level2 = { price: candidate.price, qty: candidate.qty, qualified: true, widened };
+  } else if (prev.level2 && prev.level2.qualified) {
+    level2 = prev.level2;
+  } else {
+    const runnerUp = fine.find((g) => g.price !== level3.price);
+    level2 = runnerUp
+      ? { price: runnerUp.price, qty: runnerUp.qty, qualified: false, widened: false }
+      : null;
+  }
+
+  const candidate1 = fine.find(
     (g) => g.price !== level3.price && (!level2 || g.price !== level2.price)
   );
-  const level1 = candidate1 ? { price: candidate1.price, qty: candidate1.qty } : null;
+  const level1 = candidate1 ? { price: candidate1.price, qty: candidate1.qty, qualified: true } : null;
 
   return { level1, level2, level3 };
 }

@@ -136,6 +136,47 @@ polling missed intermediate transitions and anchored the stopwatch to the wrong 
 Reading `switchCryptoProvider` directly is what gave a trustworthy number; the DOM figure
 should not be relied on.
 
+## Liquidity Walls card (2026-08-03)
+
+Replaces the BTC/ETH Dominance slot in the top row, paired 50/50 with Global Sentiment. Three
+grouped-liquidity levels per side, derived in `pivotLevels.js` from the same ~10-12 book levels
+the L2 ladder shows — immediate passive liquidity, not deep historical support/resistance.
+
+Rendered as a mirrored ladder: R3/R2/R1 above the mid, S1/S2/S3 below, so R1 and S1 both sit
+against the mid and the frozen extremes are furthest out.
+
+**Persistence rules** (unchanged since introduction):
+
+- **level3** (R3/S3) — strongest wall of the session. Frozen; only replaced when a grouped
+  quantity *reaches or exceeds* it, so it can point at a price whose liquidity has since been
+  consumed.
+- **level2** (R2/S2) — the 50%-of-level3 wall.
+- **level1** (R1/S1) — fully dynamic, recomputed every update.
+
+**level2 resolution order (upgraded 2026-08-03).** In production a single dominant wall on the
+thin BTC/USD book made 50% unreachable (S3 5.87, threshold 2.93, next bucket 0.80), so S2
+rendered as a bare `--` with no explanation. It now resolves in four steps — the first three
+preserve the original semantics exactly, only the fourth is new:
+
+1. A bucket at normal granularity (8 buckets) clearing 50% of level3.
+2. Failing that, re-group into wider price windows (4 buckets) and look again. A thin book often
+   has its second wall spread across neighbouring ticks that only clear the threshold once
+   aggregated — this finds real walls the fine pass splits apart rather than inventing one.
+   Flagged `widened`, shown as "≥50% of R3 · grouped".
+3. Failing that, retain a previously *qualified* level2, exactly as before — a genuine wall is
+   never downgraded by a quiet moment.
+4. Failing that, surface the strongest remaining bucket flagged `qualified: false`, drawn muted
+   with a dashed border and the note "below 50% of R3".
+
+Only a single-bucket book yields `null`, rendered as an explicit "no second wall in book". The
+row is never blank without saying why.
+
+**Session anchoring.** The frozen levels reset on symbol change, provider change (post-failover
+the book is a different exchange's), *and* at the venue's session roll via
+`marketHours.sessionKey()` — 00:00 UTC for crypto, 17:00 local for FX/metals. This is what
+"today's walls" means for an order book: L2 levels carry no timestamps and no history, so there
+is no previous-day data to filter; the session boundary is the only honest way to scope them.
+
 ## Open items
 
 - ~~Failover chain not yet validated on production.~~ **Done 2026-08-02, see below.**

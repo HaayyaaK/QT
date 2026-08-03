@@ -50,13 +50,57 @@ panels show a "not running" state with a Retry button, instead of failing silent
   Babel Standalone 7.29.0 from `unpkg.com` with pinned versions and SRI hashes
   (see `support.js` around `REACT_URL`/`REACT_SRI`) — that pattern is worth
   reusing for anything else pulled from a CDN.
+- `marketHours.js` — session calendars. Gates the alert stream (`isMarketOpen`)
+  and supplies the daily-roll identity the pivot card resets on
+  (`sessionKey`). Delegates DST to `Intl` with IANA zone names rather than
+  UTC-offset arithmetic. See "Liquidity walls" below.
+- `pivotLevels.js` — grouped-liquidity walls: bucketing, the R1/R2/R3 +
+  S1/S2/S3 persistence rules, mid-tick direction, and spread-width tiers.
 - **`C:\proxy-server`** (separate project, *not* inside this repo — see below)
   — local API proxy holding third-party keys server-side.
+- `assets/` — PWA manifest, favicons and app icons. Served at `/assets`; the
+  shared self-hosted fonts are mounted separately at `/vendor` by
+  `iis-setup.ps1` precisely so they don't shadow this folder.
 
 ## Tracked symbols
 
-BTC/USD, ETH/USD, EUR/USD, GBP/USD, USD/JPY, AUD/USD, NZD/USD, USD/CAD,
-USD/CHF, XAU/USD.
+Navigator row 1 (FX majors): EUR/USD, GBP/USD, USD/JPY, USD/CHF, AUD/USD,
+NZD/USD, USD/CAD. Row 2 (metals + crypto): XAU/USD, BTC/USD, ETH/USD.
+
+XAU/USD keeps `type: 'fx'` — that drives its data path (proxy klines, no L2
+book) and its COMEX calendar. Only the navigator `group` puts it beside crypto.
+
+## Liquidity walls (R1/R2/R3 · S1/S2/S3)
+
+Three grouped-liquidity levels per side of the book, drawn as a mirrored
+ladder — R1 and S1 nearest the mid, the frozen extremes furthest out.
+
+Derived from the ~10-12 levels the L2 ladder already shows, which on BTC/USD
+spans roughly $4. These are **immediate passive liquidity, not deep
+support/resistance**; the book depth was deliberately left alone rather than
+risk the validated failover path.
+
+| Level | Behaviour |
+|---|---|
+| R3 / S3 | Strongest wall of the session. Frozen — only replaced when a grouped quantity *reaches or exceeds* it, so it can outlive the liquidity it describes. |
+| R2 / S2 | The 50%-of-R3 wall. Resolution order below. |
+| R1 / S1 | Fully dynamic, recomputed every book update. |
+
+R2/S2 resolves in four steps, so the row is never blank without saying why:
+
+1. A bucket at normal granularity clearing 50% of R3.
+2. Otherwise re-group into wider price windows and look again — a thin book
+   often splits one real wall across neighbouring ticks. Shown as "grouped".
+3. Otherwise retain a previously *qualified* level; a real wall is never
+   downgraded by a quiet moment.
+4. Otherwise show the strongest runner-up, muted and dashed, noted "below 50%".
+
+A single-bucket book shows an explicit "no second wall in book".
+
+Frozen levels reset on symbol change, on provider change after a failover, and
+at the venue's session roll (00:00 UTC crypto, 17:00 local FX/metals). L2
+levels carry no timestamps and no history, so the session boundary — not a
+date filter — is what scopes them to "today".
 
 ## Data sources
 
@@ -255,9 +299,9 @@ this CSP's `connect-src`, or the browser will silently block the calls.
 npm test
 ```
 
-Runs `taEngine.test.js` **and** `cryptoProviders.test.js` via Node's built-in
-test runner (`node --test`, no external dependencies, auto-discovers both
-`*.test.js` files — no separate invocation needed per file) — 40 tests total:
+Runs via Node's built-in test runner (`node --test`, no external dependencies,
+auto-discovers every `*.test.js` — no separate invocation per file) — 74 tests
+total:
 
 - `taEngine.test.js` (22) — SMA/EMA/RSI/MACD/Bollinger/Wilder-smoothing/
   ATR/ADX/Donchian/Pearson/trend-label/simulateKlines against a fixed OHLCV
@@ -267,6 +311,13 @@ test runner (`node --test`, no external dependencies, auto-discovers both
   (`applyKrakenLevels`/`topLevels`), and the Kraken book-checksum validator
   (`crc32`/`krakenBookChecksum`, tested against a real captured live
   snapshot — see "Crypto: multi-exchange failover" below).
+- `marketHours.test.js` (16) — session windows for FX and COMEX, both DST
+  boundaries asserted explicitly (the FX roll is 21:00 UTC in summer and
+  22:00 in winter, so a hardcoded offset is wrong half the year), plus
+  `sessionKey` daily rolls across DST, month and year boundaries.
+- `pivotLevels.test.js` (18) — bucketing, level3 freeze/replace-on-equal, all
+  four level2 resolution paths (qualified, widened, retained, runner-up
+  fallback), level1 collision avoidance, and spread tiers across price scales.
 
 The proxy has its own separate test suite — see its README.
 

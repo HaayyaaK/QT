@@ -72,6 +72,58 @@ test('level1 is fully dynamic and never collides with level2/level3', () => {
   assert.notEqual(s2.level1.price, s2.level3.price);
 });
 
+test('level2 falls back to the runner-up, flagged below threshold, on a thin book', () => {
+  // One wall dwarfs everything — the exact production case where S2 rendered
+  // blank: 50% of 10 is 5, and nothing else is close.
+  const p = computePivots([[100, 10], [200, 0.8], [300, 0.5]], {});
+  assert.equal(p.level3.qty, 10);
+  assert.ok(p.level2, 'must not be blank');
+  assert.equal(p.level2.qualified, false, 'flagged as under threshold');
+  assert.equal(p.level2.price, 200, 'strongest remaining bucket');
+  assert.notEqual(p.level1.price, p.level2.price, 'level1 still distinct');
+});
+
+test('widening the price window finds a wall the fine pass split apart', () => {
+  // Parcels spread across 500-620 total 6.2 (>= 50% of 10), but at the
+  // normal granularity they land in separate buckets whose best is only 4.0
+  // — under the threshold. Only the wider window sees the whole wall.
+  const levels = [[100, 10], [500, 2.2], [560, 2.0], [620, 2.0]];
+  assert.ok(
+    Math.max(...groupLevels(levels, 8).filter(g => g.price !== 100).map(g => g.qty)) < 5,
+    'fixture must genuinely miss the threshold at fine granularity'
+  );
+  const p = computePivots(levels, {});
+  assert.equal(p.level3.qty, 10);
+  assert.equal(p.level2.qualified, true, 'aggregated parcels clear 50%');
+  assert.equal(p.level2.widened, true, 'and it took the wider window to see it');
+  assert.ok(p.level2.qty >= 5, `expected >=5, got ${p.level2.qty}`);
+});
+
+test('a genuinely qualified level2 is never downgraded to the fallback', () => {
+  const base = computePivots([[100, 10], [200, 6]], {});
+  assert.equal(base.level2.qualified, true);
+  // Book thins out — the old behaviour (retain) must still win over the
+  // new runner-up fallback.
+  const next = computePivots([[100, 10], [700, 0.2]], base);
+  assert.equal(next.level2.price, 200, 'retained');
+  assert.equal(next.level2.qualified, true);
+});
+
+test('an unqualified level2 is replaced as soon as a real wall appears', () => {
+  const thin = computePivots([[100, 10], [200, 0.8]], {});
+  assert.equal(thin.level2.qualified, false);
+  const recovered = computePivots([[100, 10], [500, 7]], thin);
+  assert.equal(recovered.level2.price, 500);
+  assert.equal(recovered.level2.qualified, true);
+});
+
+test('a single-bucket book yields no level2 at all (explicit empty state)', () => {
+  const p = computePivots([[100, 3]], {});
+  assert.equal(p.level3.price, 100);
+  assert.equal(p.level2, null, 'nothing to be runner-up');
+  assert.equal(p.level1, null);
+});
+
 test('an empty book preserves frozen levels and clears only the dynamic one', () => {
   const seeded = computePivots([[100, 10], [200, 6]], {});
   const empty = computePivots([], seeded);
