@@ -160,14 +160,10 @@
       <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#7b8494;white-space:nowrap;margin-top:6px;padding-left:21px">{{ clockText }} UTC</div>
     </div>
 
-    <!-- Symbol navigator moved to the end of the header, led by the active
-         ticker so the current selection is readable without scanning the
-         chips for the highlighted one. -->
+    <!-- Symbol navigator at the end of the header. No ticker readout here —
+         the active symbol is named in the Global Sentiment card, and the
+         selected chip already carries the highlight. -->
     <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;margin-left:auto">
-      <div style="display:flex;align-items:center;gap:8px">
-        <span aria-hidden="true" style="display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:{{ symbolBadgeColor }};color:#0a0d12;font-weight:700;font-size:12px">{{ symbolBadgeGlyph }}</span>
-        <span style="font-family:'JetBrains Mono',monospace;font-size:17px;font-weight:700;color:#eef1f5;letter-spacing:0.5px">{{ selectedLabel }}</span>
-      </div>
       <nav aria-label="Symbols" style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;max-width:660px">
         <div aria-label="FX majors" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
           <sc-for list="{{ fxChips }}" as="chip" hint-placeholder-count="7">
@@ -193,12 +189,14 @@
 
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px">
     <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:18px">
-      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 12px;margin-bottom:14px">
-        <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">GLOBAL SENTIMENT &amp; MARKET HEALTH</h2>
-        <div style="display:flex;align-items:center;gap:7px">
-          <span aria-hidden="true" style="display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:{{ symbolBadgeColor }};color:#0a0d12;font-weight:700;font-size:11px">{{ symbolBadgeGlyph }}</span>
-          <span style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:#c7ccd6;letter-spacing:0.5px">{{ selectedLabel }}</span>
-        </div>
+      <!-- Card title, then the active symbol on its own line beneath it —
+           left-aligned with the rest of the card's content rather than
+           floated opposite the title, and sized to read as the card's
+           subject line rather than another small label. -->
+      <h2 style="margin:0 0 8px;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">GLOBAL SENTIMENT &amp; MARKET HEALTH</h2>
+      <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px">
+        <span aria-hidden="true" style="display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:{{ symbolBadgeColor }};color:#0a0d12;font-weight:700;font-size:14px">{{ symbolBadgeGlyph }}</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;color:#eef1f5;letter-spacing:0.5px">{{ selectedLabel }}</span>
       </div>
       <div style="display:flex;align-items:center;gap:24px">
         <div role="img" aria-label="{{ sentimentAriaLabel }}" style="position:relative;width:120px;height:70px;overflow:hidden">
