@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="QUANT/TERMINAL">
+  <rect width="512" height="512" rx="96" fill="#0a0d12"/>
+  <rect x="24" y="24" width="464" height="464" rx="76" fill="none" stroke="#1e2530" stroke-width="8"/>
+  <!-- Candlesticks: the dashboard's own palette, green up / red down -->
+  <g stroke-linecap="round">
+    <line x1="140" y1="150" x2="140" y2="368" stroke="#34d399" stroke-width="14"/>
+    <rect x="116" y="206" width="48" height="120" rx="8" fill="#34d399"/>
+    <line x1="256" y1="120" x2="256" y2="392" stroke="#f87171" stroke-width="14"/>
+    <rect x="232" y="176" width="48" height="164" rx="8" fill="#f87171"/>
+    <line x1="372" y1="164" x2="372" y2="352" stroke="#34d399" stroke-width="14"/>
+    <rect x="348" y="220" width="48" height="96" rx="8" fill="#34d399"/>
+  </g>
+  <!-- The accent slash from the QUANT/TERMINAL wordmark -->
+  <line x1="196" y1="428" x2="316" y2="428" stroke="#60a5fa" stroke-width="16" stroke-linecap="round"/>
+</svg>

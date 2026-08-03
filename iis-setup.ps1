@@ -70,24 +70,39 @@ if (-not (Test-Path "IIS:\Sites\$siteName")) {
     }
 }
 
-# --- Shared assets virtual directory ----------------------------------------
+# --- Shared vendor virtual directory ----------------------------------------
 # Self-hosted fonts live in a shared folder outside this site's physical path
-# (several sites on this box use it), so /assets has to be mapped in rather
-# than resolved from the site root. Without this the @font-face URLs in
+# (several sites on this box use it), so it has to be mapped in rather than
+# resolved from the site root. Without this the @font-face URLs in
 # TradingDashboard.html 404 and the browser silently falls back to a system
 # font — which looks fine at a glance, which is exactly why it's worth
 # asserting here rather than leaving as a manual step.
-$assetsPhysical = 'C:\inetpub\wwwroot\assets'
-if (Test-Path $assetsPhysical) {
-    $vdir = Get-WebVirtualDirectory -Site $siteName -Name 'assets' -ErrorAction SilentlyContinue
+#
+# Deliberately mounted at /vendor, NOT /assets: the site has its own
+# assets\ folder (site.webmanifest, icon) and a vdir at /assets would shadow
+# it entirely, so those files would 404 no matter what was on disk.
+$vendorPhysical = 'C:\inetpub\wwwroot\assets'
+if (Test-Path $vendorPhysical) {
+    # Clear the earlier /assets mapping if this script created one before the
+    # shadowing problem was spotted.
+    # Removal goes through appcmd rather than Remove-WebVirtualDirectory:
+    # the cmdlet throws on a site-root vdir whether or not -Application is
+    # supplied ("Value cannot be null" / "Object reference not set"), while
+    # appcmd handles the same delete cleanly.
+    $stale = Get-WebVirtualDirectory -Site $siteName -Name 'assets' -ErrorAction SilentlyContinue
+    if ($stale) {
+        & "$env:SystemRoot\System32\inetsrv\appcmd.exe" delete vdir "$siteName/assets" | Out-Null
+        Write-Host "Removed stale /assets virtual directory (it shadowed the site's own assets folder)."
+    }
+    $vdir = Get-WebVirtualDirectory -Site $siteName -Name 'vendor' -ErrorAction SilentlyContinue
     if (-not $vdir) {
-        New-WebVirtualDirectory -Site $siteName -Name 'assets' -PhysicalPath $assetsPhysical | Out-Null
-        Write-Host "Mapped /assets -> $assetsPhysical."
+        New-WebVirtualDirectory -Site $siteName -Name 'vendor' -PhysicalPath $vendorPhysical | Out-Null
+        Write-Host "Mapped /vendor -> $vendorPhysical."
     } else {
-        Write-Host "/assets virtual directory already present."
+        Write-Host "/vendor virtual directory already present."
     }
 } else {
-    Write-Warning "$assetsPhysical not found — /assets not mapped; self-hosted fonts will 404."
+    Write-Warning "$vendorPhysical not found — /vendor not mapped; self-hosted fonts will 404."
 }
 
 # --- ARR reverse-proxy feature (server-wide, required for web.config's

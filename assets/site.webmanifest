@@ -1,0 +1,29 @@
+{
+  "name": "QUANT/TERMINAL — Live Market Dashboard",
+  "short_name": "QUANT/TERM",
+  "description": "Live crypto and FX terminal: L2 order book, grouped liquidity walls, multi-timeframe trend, correlation matrix and automated signal stream.",
+  "id": "/",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#0a0d12",
+  "background_color": "#0a0d12",
+  "categories": ["finance", "business", "productivity"],
+  "lang": "en",
+  "dir": "ltr",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

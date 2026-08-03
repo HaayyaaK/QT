@@ -51,6 +51,7 @@
   default-src 'none';
   base-uri 'self';
   object-src 'none';
+  manifest-src 'self';
   script-src 'self' 'unsafe-eval' 'unsafe-inline' https://unpkg.com https://s3.tradingview.com https://*.tradingview.com;
   style-src 'self' 'unsafe-inline';
   font-src 'self';
@@ -63,22 +64,29 @@
 <body>
 <x-dc>
 <helmet>
+  <!-- Relative href deliberately: this file is served both from the site
+       root (fx.hayyaak.com/) and from a subpath on the default site
+       (/projects/hayyaak_QT/), and a relative path resolves correctly under
+       both. A root-absolute /assets/... would only work on one of them. -->
+  <link rel="manifest" href="assets/site.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+  <meta name="theme-color" content="#0a0d12">
   <style>
-    /* Self-hosted from the shared /assets virtual directory (mapped by
+    /* Self-hosted from the shared /vendor virtual directory (mapped by
        iis-setup.ps1) rather than Google Fonts. Both faces are variable
        fonts, so one file per family covers the 400-700 range the dashboard
        uses — no separate weight files. font-display:swap preserves the same
        no-invisible-text behaviour the Google Fonts URL requested. */
     @font-face {
       font-family: 'Inter';
-      src: url('/assets/fontawesome-free-7.3.1-web/webfonts/Inter-VariableFont_opsz,wght.woff2') format('woff2-variations');
+      src: url('/vendor/fontawesome-free-7.3.1-web/webfonts/Inter-VariableFont_opsz,wght.woff2') format('woff2-variations');
       font-weight: 400 700;
       font-style: normal;
       font-display: swap;
     }
     @font-face {
       font-family: 'JetBrains Mono';
-      src: url('/assets/fontawesome-free-7.3.1-web/webfonts/JetBrainsMono-VariableFont_wght.woff2') format('woff2-variations');
+      src: url('/vendor/fontawesome-free-7.3.1-web/webfonts/JetBrainsMono-VariableFont_wght.woff2') format('woff2-variations');
       font-weight: 400 700;
       font-style: normal;
       font-display: swap;
@@ -156,10 +164,17 @@
         <span aria-hidden="true" style="display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:{{ symbolBadgeColor }};color:#0a0d12;font-weight:700;font-size:12px">{{ symbolBadgeGlyph }}</span>
         <span style="font-family:'JetBrains Mono',monospace;font-size:17px;font-weight:700;color:#eef1f5;letter-spacing:0.5px">{{ selectedLabel }}</span>
       </div>
-      <nav aria-label="Symbols" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:640px">
-        <sc-for list="{{ symbolChips }}" as="chip" hint-placeholder-count="10">
-          <button onClick="{{ chip.onClick }}" style="{{ chip.style }}">{{ chip.label }}</button>
-        </sc-for>
+      <nav aria-label="Symbols" style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;max-width:660px">
+        <div aria-label="FX majors" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+          <sc-for list="{{ fxChips }}" as="chip" hint-placeholder-count="7">
+            <button onClick="{{ chip.onClick }}" style="{{ chip.style }}">{{ chip.label }}</button>
+          </sc-for>
+        </div>
+        <div aria-label="Metals and crypto" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+          <sc-for list="{{ altChips }}" as="chip" hint-placeholder-count="3">
+            <button onClick="{{ chip.onClick }}" style="{{ chip.style }}">{{ chip.label }}</button>
+          </sc-for>
+        </div>
       </nav>
     </div>
   </header>
@@ -275,10 +290,12 @@
           </sc-for>
         </div>
 
-        <!-- Best ask ‖ bid/ask volume split ‖ best bid. The bar is the
-             cumulative quantity proportion across the visible book, so it
-             reads as "which side is currently stacked heavier". -->
-        <div style="display:flex;align-items:center;gap:12px;margin:10px 0;padding:10px 4px;border-top:1px solid #1e2530;border-bottom:1px solid #1e2530">
+        <!-- Best ask ‖ bid/ask volume split ‖ best bid, centred as one unit.
+             The bar is the cumulative quantity proportion across the visible
+             book, so it reads as "which side is currently stacked heavier".
+             The mid price is not repeated here — it already leads the
+             sentiment card. -->
+        <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin:10px 0;padding:12px 4px;border-top:1px solid #1e2530;border-bottom:1px solid #1e2530">
           <div style="display:flex;align-items:center;gap:5px;white-space:nowrap">
             <span aria-hidden="true" style="font-size:12px;color:#f87171">▼</span>
             <span style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#f87171">{{ bestAskText }}</span>
@@ -292,11 +309,6 @@
               <div style="width:{{ bidVolPct }}%;background:linear-gradient(90deg,#34d399,#065f46);display:flex;align-items:center;justify-content:flex-end;padding-right:5px">
                 <span style="font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:#04231a">{{ bidVolLabel }}</span>
               </div>
-            </div>
-            <div style="display:flex;align-items:center;justify-content:center;gap:7px;margin-top:5px">
-              <span aria-hidden="true" style="font-size:11px;color:{{ midTickColor }}">{{ midTickArrow }}</span>
-              <span style="font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:{{ midTickColor }}">{{ midPriceText }}</span>
-              <span style="font-size:9px;color:#4a5568;letter-spacing:0.5px">MID</span>
             </div>
           </div>
 
@@ -623,16 +635,30 @@ class Component extends DCLogic {
       // pairs (~$200K/24h quote volume vs. billions), so expect a wider
       // L2 spread and choppier price action — that's real market
       // structure, not a bug.
-      { id: 'BTCUSD', label: 'BTC/USD', type: 'crypto', tv: 'BINANCE:BTCUSD', base: 65000 },
-      { id: 'ETHUSD', label: 'ETH/USD', type: 'crypto', tv: 'BINANCE:ETHUSD', base: 3200 },
-      { id: 'EURUSD', label: 'EUR/USD', type: 'fx', tv: 'FX:EURUSD', base: 1.08 },
-      { id: 'GBPUSD', label: 'GBP/USD', type: 'fx', tv: 'FX:GBPUSD', base: 1.27 },
-      { id: 'USDJPY', label: 'USD/JPY', type: 'fx', tv: 'FX:USDJPY', base: 155 },
-      { id: 'AUDUSD', label: 'AUD/USD', type: 'fx', tv: 'FX:AUDUSD', base: 0.66 },
-      { id: 'NZDUSD', label: 'NZD/USD', type: 'fx', tv: 'FX:NZDUSD', base: 0.61 },
-      { id: 'USDCAD', label: 'USD/CAD', type: 'fx', tv: 'FX:USDCAD', base: 1.37 },
-      { id: 'USDCHF', label: 'USD/CHF', type: 'fx', tv: 'FX:USDCHF', base: 0.91 },
-      { id: 'XAUUSD', label: 'XAU/USD', type: 'fx', tv: 'OANDA:XAUUSD', base: 2400 },
+      // Ordered FX majors first, then gold + crypto — the navigator renders
+      // these as two rows split on `group`, and the correlation matrix
+      // inherits the same order so related instruments sit adjacent.
+      { id: 'EURUSD', label: 'EUR/USD', type: 'fx', group: 'fx', tv: 'FX:EURUSD', base: 1.08 },
+      { id: 'GBPUSD', label: 'GBP/USD', type: 'fx', group: 'fx', tv: 'FX:GBPUSD', base: 1.27 },
+      { id: 'USDJPY', label: 'USD/JPY', type: 'fx', group: 'fx', tv: 'FX:USDJPY', base: 155 },
+      { id: 'USDCHF', label: 'USD/CHF', type: 'fx', group: 'fx', tv: 'FX:USDCHF', base: 0.91 },
+      { id: 'AUDUSD', label: 'AUD/USD', type: 'fx', group: 'fx', tv: 'FX:AUDUSD', base: 0.66 },
+      { id: 'NZDUSD', label: 'NZD/USD', type: 'fx', group: 'fx', tv: 'FX:NZDUSD', base: 0.61 },
+      { id: 'USDCAD', label: 'USD/CAD', type: 'fx', group: 'fx', tv: 'FX:USDCAD', base: 1.37 },
+      // Gold sits with crypto in the navigator's second row, but keeps
+      // type:'fx' — that drives the data path (proxy klines, no L2 book) and
+      // the COMEX calendar, neither of which changes because of where the
+      // chip is drawn.
+      { id: 'XAUUSD', label: 'XAU/USD', type: 'fx', group: 'alt', tv: 'OANDA:XAUUSD', base: 2400 },
+      // BTCUSD/ETHUSD, not BTCUSDT/ETHUSDT — Binance genuinely lists these
+      // as real USD-quoted spot pairs (confirmed live: quoteAsset "USD",
+      // status "TRADING", real klines/ticker data), not an approximation
+      // via the USDT stablecoin. Liquidity is far thinner than the USDT
+      // pairs (~$200K/24h quote volume vs. billions), so expect a wider
+      // L2 spread and choppier price action — that's real market
+      // structure, not a bug.
+      { id: 'BTCUSD', label: 'BTC/USD', type: 'crypto', group: 'alt', tv: 'BINANCE:BTCUSD', base: 65000 },
+      { id: 'ETHUSD', label: 'ETH/USD', type: 'crypto', group: 'alt', tv: 'BINANCE:ETHUSD', base: 3200 },
     ];
     this.chartRef = React.createRef();
     this.heatmapRef = React.createRef();
@@ -713,8 +739,9 @@ class Component extends DCLogic {
     const { PROVIDERS, attemptWithFailover } = await import('./cryptoProviders.js');
     this.cryptoProviders = PROVIDERS;
     this.attemptWithFailover = attemptWithFailover;
-    const { isMarketOpen } = await import('./marketHours.js');
+    const { isMarketOpen, sessionKey } = await import('./marketHours.js');
     this.isMarketOpen = isMarketOpen;
+    this.sessionKey = sessionKey;
     this.pivots = await import('./pivotLevels.js');
     this.cryptoActiveId = PROVIDERS[0].id;
     this.clockTimer = setInterval(() => this.setState({ clockText: new Date().toISOString().substr(11, 8) }), 1000);
@@ -1231,8 +1258,14 @@ class Component extends DCLogic {
       // Frozen pivot levels only mean anything within one continuous book:
       // a different symbol, or the same symbol re-subscribed on another
       // exchange after failover, is a different liquidity picture entirely.
-      // Reset on either rather than carrying a stale wall across.
-      const pivotKey = `${symbolId}|${this.cryptoActiveId}`;
+      // The session component adds the third reset — at the venue's daily
+      // roll (00:00 UTC for crypto, 17:00 local for FX/metals), so R3/S3
+      // describe today's walls rather than accumulating a high-water mark
+      // forever. This is what "current day only" means for an order book:
+      // levels carry no timestamps, so the session boundary is the only
+      // honest way to scope them.
+      const session = this.sessionKey ? this.sessionKey((this.symMeta(symbolId) || {}).type, symbolId) : '';
+      const pivotKey = `${symbolId}|${this.cryptoActiveId}|${session}`;
       if (this.pivotKey !== pivotKey) {
         this.pivotKey = pivotKey;
         this.pivotState = { asks: {}, bids: {} };
@@ -1330,6 +1363,11 @@ class Component extends DCLogic {
       onClick: () => this.changeSymbol(sm.id),
       style: `cursor:pointer;font:inherit;font-family:'JetBrains Mono',monospace;font-size:11px;padding:5px 10px;border-radius:3px;border:1px solid ${sm.id === s.symbol ? '#60a5fa' : '#1e2530'};color:${sm.id === s.symbol ? '#60a5fa' : '#7b8494'};background:${sm.id === s.symbol ? 'rgba(96,165,250,0.08)' : 'transparent'}`,
     })));
+    // Split for the navigator's two rows: FX majors on top, gold + crypto
+    // beneath. Derived from the same chip list so styling/selection logic
+    // stays in one place.
+    const fxChips = symbolChips.filter((_, i) => this.symbols[i].group === 'fx');
+    const altChips = symbolChips.filter((_, i) => this.symbols[i].group === 'alt');
 
     const fngValue = s.fng.value, fngLabel = s.fng.label;
     const fngColor = fngValue < 40 ? '#f87171' : fngValue > 60 ? '#34d399' : '#fbbf24';
@@ -1570,7 +1608,7 @@ class Component extends DCLogic {
       wsDotColor: wsStatusColor, wsStatusColor, wsStatusText: wsTextMap[s.wsStatus] || 'OFFLINE',
       wsOffline: s.wsStatus === 'offline', reconnectWS: () => this.manualReconnectWS(),
       cryptoProviderVisible, cryptoProviderLabel, chartSourceLabel,
-      clockText: s.clockText, symbolChips, selectedLabel: sym.label,
+      clockText: s.clockText, fxChips, altChips, selectedLabel: sym.label,
       hasSimulatedData, simulatedSymbolsText,
       sentimentNeedleDeg, sentimentColor, sentimentLabel, sentimentScore: clamped,
       sentimentAriaLabel: `Market sentiment: ${sentimentLabel}, composite score ${clamped} of 100`,

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isMarketOpen, zonedWeekMinutes, calendarFor } from './marketHours.js';
+import { isMarketOpen, zonedWeekMinutes, calendarFor, sessionKey } from './marketHours.js';
 
 // All fixtures are written as explicit UTC instants (Z suffix) so the tests
 // assert the *conversion*, not the machine's local zone. A test that passed
@@ -85,6 +85,51 @@ test('gold observes the daily 16:00-17:00 CT maintenance break midweek', () => {
   assert.equal(isMarketOpen('fx', 'XAUUSD', at('2026-08-05T21:00:00Z')), false);
   // FX has no such break — same instant, still open
   assert.equal(isMarketOpen('fx', 'EURUSD', at('2026-08-05T21:30:00Z')), true);
+});
+
+test('sessionKey: crypto rolls at 00:00 UTC', () => {
+  const before = sessionKey('crypto', 'BTCUSD', at('2026-08-05T23:59:00Z'));
+  const after = sessionKey('crypto', 'BTCUSD', at('2026-08-06T00:01:00Z'));
+  assert.notEqual(before, after, 'a new UTC day is a new session');
+  // Stable within the day
+  assert.equal(before, sessionKey('crypto', 'BTCUSD', at('2026-08-05T08:00:00Z')));
+});
+
+test('sessionKey: FX rolls at 17:00 New York, not at UTC midnight', () => {
+  // Wed 20:00 UTC = 16:00 EDT — still Wednesday's session
+  const beforeRoll = sessionKey('fx', 'EURUSD', at('2026-08-05T20:00:00Z'));
+  // Wed 21:00 UTC = 17:00 EDT — Thursday's session has begun
+  const afterRoll = sessionKey('fx', 'EURUSD', at('2026-08-05T21:00:00Z'));
+  assert.notEqual(beforeRoll, afterRoll);
+  // UTC midnight in between must NOT start a new session
+  assert.equal(afterRoll, sessionKey('fx', 'EURUSD', at('2026-08-06T02:00:00Z')));
+  // ...and it still matches later that same session, before the next roll
+  assert.equal(afterRoll, sessionKey('fx', 'EURUSD', at('2026-08-06T19:00:00Z')));
+});
+
+test('sessionKey: FX roll tracks DST like the open does', () => {
+  // January: 17:00 EST = 22:00 UTC, so 21:00 UTC is still the prior session
+  const before = sessionKey('fx', 'EURUSD', at('2026-01-14T21:00:00Z'));
+  const after = sessionKey('fx', 'EURUSD', at('2026-01-14T22:00:00Z'));
+  assert.notEqual(before, after);
+});
+
+test('sessionKey: gold rolls on Chicago time, distinct from FX', () => {
+  // 21:30 UTC = 16:30 CDT (before the 17:00 CT roll) but 17:30 EDT (after
+  // the NY roll) — the two calendars must disagree here.
+  const ts = at('2026-08-05T21:30:00Z');
+  const goldNow = sessionKey('fx', 'XAUUSD', ts);
+  const goldAfter = sessionKey('fx', 'XAUUSD', at('2026-08-05T22:30:00Z'));
+  assert.notEqual(goldNow, goldAfter, 'gold rolls at 17:00 CT = 22:00 UTC');
+  assert.ok(goldNow.startsWith('America/Chicago:'));
+  assert.ok(sessionKey('fx', 'EURUSD', ts).startsWith('America/New_York:'));
+});
+
+test('sessionKey: month and year boundaries roll cleanly', () => {
+  const a = sessionKey('fx', 'EURUSD', at('2026-08-31T21:30:00Z')); // -> Sep 1 session
+  assert.ok(a.endsWith('2026-09-01'), `got ${a}`);
+  const b = sessionKey('fx', 'EURUSD', at('2026-12-31T22:30:00Z')); // EST -> Jan 1 2027
+  assert.ok(b.endsWith('2027-01-01'), `got ${b}`);
 });
 
 test('gold has no maintenance break on Sunday evening (session just opened)', () => {

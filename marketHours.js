@@ -70,6 +70,35 @@ export function calendarFor(symbolType, symbolId) {
   return FX;
 }
 
+// Identifies which trading session an instant falls in. Anything keyed on
+// this resets when the session rolls over, which is how the pivot card gets
+// "today's walls" without needing timestamps on L2 levels — an order book is
+// a live snapshot with no history to filter, so the only meaningful notion of
+// "today" is when the frozen levels were last cleared.
+//
+// Crypto rolls at 00:00 UTC (no session, so the UTC day is the convention).
+// FX and metals roll at their venue's 17:00 local open, the same boundary
+// that starts the week — so a Tuesday 18:00 ET tick belongs to Wednesday's
+// session, exactly as the trading day is quoted.
+export function sessionKey(symbolType, symbolId, timestamp = Date.now()) {
+  const cal = calendarFor(symbolType, symbolId);
+  if (!cal) return `utc:${new Date(timestamp).toISOString().slice(0, 10)}`;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: cal.timeZone,
+    hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit',
+  }).formatToParts(new Date(timestamp));
+  const get = (type) => parts.find((p) => p.type === type).value;
+  const hour = parseInt(get('hour'), 10) % 24;
+  const rollHour = Math.floor(cal.open / 60);
+  // Build the local calendar date as a UTC instant purely so date arithmetic
+  // (month/year rollover) is someone else's problem, then step forward when
+  // we are past the roll.
+  const d = new Date(Date.UTC(+get('year'), +get('month') - 1, +get('day')));
+  if (hour >= rollHour) d.setUTCDate(d.getUTCDate() + 1);
+  return `${cal.timeZone}:${d.toISOString().slice(0, 10)}`;
+}
+
 // The gate. `symbolType` is the dashboard's own 'crypto' | 'fx' tag;
 // `symbolId` distinguishes XAUUSD (metals calendar) from the FX majors.
 // Returns true for crypto unconditionally — 24/7, no maintenance windows on

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="QUANT/TERMINAL">
+  <!-- Maskable variant: artwork is kept inside the inner 80% safe zone so
+       Android's circle/squircle masks never clip the candlesticks. Full-bleed
+       background, no rounded corners — the platform supplies the shape. -->
+  <rect width="512" height="512" fill="#0a0d12"/>
+  <g stroke-linecap="round">
+    <line x1="171" y1="186" x2="171" y2="340" stroke="#34d399" stroke-width="11"/>
+    <rect x="152" y="226" width="38" height="85" rx="6" fill="#34d399"/>
+    <line x1="256" y1="165" x2="256" y2="357" stroke="#f87171" stroke-width="11"/>
+    <rect x="237" y="205" width="38" height="116" rx="6" fill="#f87171"/>
+    <line x1="341" y1="196" x2="341" y2="329" stroke="#34d399" stroke-width="11"/>
+    <rect x="322" y="236" width="38" height="68" rx="6" fill="#34d399"/>
+  </g>
+  <line x1="213" y1="378" x2="299" y2="378" stroke="#60a5fa" stroke-width="12" stroke-linecap="round"/>
+</svg>
