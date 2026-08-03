@@ -1515,7 +1515,10 @@ class Component extends DCLogic {
     const px = (v) => v == null ? '--' : v.toFixed(sym.base > 1000 ? 1 : 5);
     const qt = (v) => v == null ? '--' : v.toFixed(4);
     // R = resistance (asks, above mid), S = support (bids, below mid).
-    // Rendered strongest-first so the frozen wall reads at the top.
+    // Tags stay bound to rank — R1 dynamic, R2 threshold, R3 frozen — but the
+    // rows are *ordered by price proximity to the mid* (see the sort below).
+    // Rank order and price order are independent: R3 is the biggest wall, not
+    // necessarily the furthest one.
     const pivotMax = {
       r: (s.askPivots.level3 || {}).qty || 0,
       s: (s.bidPivots.level3 || {}).qty || 0,
@@ -1525,26 +1528,46 @@ class Component extends DCLogic {
       // note, so "under threshold" is legible as a state rather than looking
       // like the same confidence as a real wall.
       const provisional = !!lvl && lvl.qualified === false;
+      // Breached: the mid has crossed the level, so a "resistance" now sits
+      // below spot (or a "support" above it). The persistence rules keep the
+      // level frozen on purpose, but rendering it identically to a live wall
+      // implies price has yet to reach it — which is the opposite of true.
+      // Amber + a `breached` note, without touching the freeze itself.
+      const breached = !!lvl && s.mid != null &&
+        (kind === 'r' ? s.mid > lvl.price : s.mid < lvl.price);
+      const amber = '#fbbf24';
+      const sideColor = kind === 'r' ? '#f87171' : '#34d399';
       return {
         tag,
         price: lvl ? px(lvl.price) : '--',
         qty: lvl ? qt(lvl.qty) : '--',
-        note,
-        color: kind === 'r' ? '#f87171' : '#34d399',
-        tagOpacity: provisional ? '0.55' : '1',
-        priceColor: provisional ? '#7b8494' : '#eef1f5',
+        note: breached ? `${note} · breached` : note,
+        color: breached ? amber : sideColor,
+        tagOpacity: (provisional || breached) ? '0.55' : '1',
+        priceColor: breached ? '#7b8494' : (provisional ? '#7b8494' : '#eef1f5'),
         bg: lvl
-          ? (provisional
-              ? 'transparent'
-              : (kind === 'r' ? 'rgba(248,113,113,0.09)' : 'rgba(52,211,153,0.09)'))
+          ? (breached
+              ? 'rgba(251,191,36,0.06)'
+              : (provisional
+                  ? 'transparent'
+                  : (kind === 'r' ? 'rgba(248,113,113,0.09)' : 'rgba(52,211,153,0.09)')))
           : 'transparent',
-        border: provisional ? `1px dashed ${kind === 'r' ? 'rgba(248,113,113,0.35)' : 'rgba(52,211,153,0.35)'}` : '1px solid transparent',
+        border: breached
+          ? '1px dashed rgba(251,191,36,0.45)'
+          : (provisional ? `1px dashed ${sideColor}59` : '1px solid transparent'),
         // Bar is scaled against the frozen strongest wall on the same side, so
         // the three rows are visually comparable to each other.
         widthPct: lvl && pivotMax[kind] ? Math.max(4, Math.min(100, (lvl.qty / pivotMax[kind]) * 100)) : 0,
-        barOpacity: provisional ? '0.06' : '0.13',
+        barOpacity: (provisional || breached) ? '0.06' : '0.13',
+        // Sort key — |distance from mid|. Absolute so a breached level that
+        // has ended up on the wrong side still lands somewhere sensible
+        // rather than sorting to an extreme.
+        dist: (lvl && s.mid != null) ? Math.abs(lvl.price - s.mid) : Number.POSITIVE_INFINITY,
       };
     };
+    // Nearest the mid at the top, both sides. Rows with no level (dist
+    // Infinity) fall to the bottom instead of displacing a real wall.
+    const byProximity = (rows) => rows.slice().sort((a, b) => a.dist - b.dist);
     // level2's note explains which of the four resolution paths it took, so
     // an under-threshold or absent wall is never an unexplained blank.
     const level2Note = (lvl, ref) => {
@@ -1555,20 +1578,22 @@ class Component extends DCLogic {
     };
     const FROZEN = 'strongest · frozen';
     const DYN = 'live';
-    const resistanceRows = [
+    // Both sides sorted nearest-the-mid first. Previously these were emitted
+    // in rank order, which only *looked* like a price ladder — measured live,
+    // the ask side was ordered by distance 0 times out of 10 samples, and a
+    // frozen R3 could render at the top while being the closest level to the
+    // mid. Rank still drives the tag and the persistence rules; it no longer
+    // drives vertical position.
+    const resistanceRows = byProximity([
       pivotRow('R3', s.askPivots.level3, 'r', FROZEN),
       pivotRow('R2', s.askPivots.level2, 'r', level2Note(s.askPivots.level2, 'R3')),
       pivotRow('R1', s.askPivots.level1, 'r', DYN),
-    ];
-    // Mirrored ladder: S1 sits directly under the mid and S3 furthest below,
-    // so distance from the mid grows outward on both sides (R1/S1 adjacent,
-    // R3/S3 at the extremes). The resistance side keeps R1 nearest the mid
-    // by rendering R3 first — same geometry, read downward.
-    const supportRows = [
+    ]);
+    const supportRows = byProximity([
       pivotRow('S1', s.bidPivots.level1, 's', DYN),
       pivotRow('S2', s.bidPivots.level2, 's', level2Note(s.bidPivots.level2, 'S3')),
       pivotRow('S3', s.bidPivots.level3, 's', FROZEN),
-    ];
+    ]);
 
     // Cumulative bid/ask split across the visible book, for the mid-section
     // proportion bar. Uses the same levels the ladder renders, so the bar and

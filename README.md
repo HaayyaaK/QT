@@ -72,8 +72,21 @@ book) and its COMEX calendar. Only the navigator `group` puts it beside crypto.
 
 ## Liquidity walls (R1/R2/R3 · S1/S2/S3)
 
-Three grouped-liquidity levels per side of the book, drawn as a mirrored
-ladder — R1 and S1 nearest the mid, the frozen extremes furthest out.
+Three grouped-liquidity levels per side of the book.
+
+**Rows are ordered by price proximity to the mid — the closest level is
+displayed at the top for each side.** The tag reflects *rank*, not position:
+R3 is the largest wall, which may sit anywhere relative to the others. An
+earlier version of this file claimed R1/S1 were always nearest the mid and the
+frozen levels furthest out; that was wrong. Measured against the live book,
+the ask side was ordered by distance in 0 of 10 samples, because rank order
+and price order are independent.
+
+R3 and S3 keep their frozen high-water marks, but are visually tagged
+`breached` — amber, dashed, dimmed — once the mid has crossed them. A frozen
+resistance below spot is a level price has already traded through; rendering
+it like a live wall would imply the opposite. The persistence rule is
+unchanged: it still holds until a larger wall appears or the session rolls.
 
 Derived from the ~10-12 levels the L2 ladder already shows, which on BTC/USD
 spans roughly $4. These are **immediate passive liquidity, not deep
