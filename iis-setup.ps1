@@ -70,6 +70,26 @@ if (-not (Test-Path "IIS:\Sites\$siteName")) {
     }
 }
 
+# --- Shared assets virtual directory ----------------------------------------
+# Self-hosted fonts live in a shared folder outside this site's physical path
+# (several sites on this box use it), so /assets has to be mapped in rather
+# than resolved from the site root. Without this the @font-face URLs in
+# TradingDashboard.html 404 and the browser silently falls back to a system
+# font — which looks fine at a glance, which is exactly why it's worth
+# asserting here rather than leaving as a manual step.
+$assetsPhysical = 'C:\inetpub\wwwroot\assets'
+if (Test-Path $assetsPhysical) {
+    $vdir = Get-WebVirtualDirectory -Site $siteName -Name 'assets' -ErrorAction SilentlyContinue
+    if (-not $vdir) {
+        New-WebVirtualDirectory -Site $siteName -Name 'assets' -PhysicalPath $assetsPhysical | Out-Null
+        Write-Host "Mapped /assets -> $assetsPhysical."
+    } else {
+        Write-Host "/assets virtual directory already present."
+    }
+} else {
+    Write-Warning "$assetsPhysical not found — /assets not mapped; self-hosted fonts will 404."
+}
+
 # --- ARR reverse-proxy feature (server-wide, required for web.config's
 #     ProxyApi rule to actually forward instead of failing) -----------------
 $proxyEnabled = Get-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' `

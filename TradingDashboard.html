@@ -52,8 +52,8 @@
   base-uri 'self';
   object-src 'none';
   script-src 'self' 'unsafe-eval' 'unsafe-inline' https://unpkg.com https://s3.tradingview.com https://*.tradingview.com;
-  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
-  font-src 'self' https://fonts.gstatic.com;
+  style-src 'self' 'unsafe-inline';
+  font-src 'self';
   img-src 'self' data: https://s3.tradingview.com https://www.tradingview.com https://*.tradingview.com https://*.tradingview-widget.com;
   connect-src 'self' https://api.binance.com wss://stream.binance.com:9443 https://api.kraken.com wss://ws.kraken.com https://www.bitstamp.net wss://ws.bitstamp.net https://api.gemini.com https://api.coingecko.com https://api.alternative.me http://127.0.0.1:8787 http://localhost:8787;
   frame-src https://s3.tradingview.com https://www.tradingview.com https://*.tradingview.com https://tradingview-widget.com https://*.tradingview-widget.com;
@@ -63,9 +63,26 @@
 <body>
 <x-dc>
 <helmet>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
+    /* Self-hosted from the shared /assets virtual directory (mapped by
+       iis-setup.ps1) rather than Google Fonts. Both faces are variable
+       fonts, so one file per family covers the 400-700 range the dashboard
+       uses — no separate weight files. font-display:swap preserves the same
+       no-invisible-text behaviour the Google Fonts URL requested. */
+    @font-face {
+      font-family: 'Inter';
+      src: url('/assets/fontawesome-free-7.3.1-web/webfonts/Inter-VariableFont_opsz,wght.woff2') format('woff2-variations');
+      font-weight: 400 700;
+      font-style: normal;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: 'JetBrains Mono';
+      src: url('/assets/fontawesome-free-7.3.1-web/webfonts/JetBrainsMono-VariableFont_wght.woff2') format('woff2-variations');
+      font-weight: 400 700;
+      font-style: normal;
+      font-display: swap;
+    }
     body { margin: 0; background: #0a0d12; }
     a { color: #60a5fa; text-decoration: none; }
     a:hover { color: #8ab4fb; }
@@ -114,24 +131,37 @@
 
 <div style="min-height:100vh;background:#0a0d12;color:#dde3ea;font-family:'Inter',system-ui,sans-serif;padding:20px 24px 48px;box-sizing:border-box">
 
-  <header style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;padding-bottom:16px;border-bottom:1px solid #1e2530;margin-bottom:20px">
-    <div style="display:flex;align-items:center;gap:12px">
-      <div aria-hidden="true" style="width:9px;height:9px;border-radius:50%;background:{{ wsDotColor }};animation:qt-pulse 2s ease-in-out infinite"></div>
-      <h1 style="margin:0;font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:700;letter-spacing:0.5px;color:#eef1f5">QUANT<span style="color:#60a5fa">/</span>TERMINAL</h1>
-      <div role="status" aria-live="polite" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{{ wsStatusColor }};padding:3px 9px;border:1px solid {{ wsStatusColor }};border-radius:3px;white-space:nowrap">{{ wsStatusText }}</div>
-      <sc-if value="{{ cryptoProviderVisible }}">
-        <div title="Active crypto data provider (ACTIVE_PROVIDER) — Kraken > Bitstamp > Gemini > Binance, auto-failover/recovery" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#7b8494;padding:3px 9px;border:1px solid #1e2530;border-radius:3px;white-space:nowrap">{{ cryptoProviderLabel }}</div>
-      </sc-if>
-      <sc-if value="{{ wsOffline }}">
-        <button onClick="{{ reconnectWS }}" style="cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:11px;padding:3px 9px;border-radius:3px;border:1px solid #60a5fa;color:#60a5fa;background:transparent">Reconnect</button>
-      </sc-if>
+  <header style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:14px 20px;padding-bottom:16px;border-bottom:1px solid #1e2530;margin-bottom:20px">
+    <div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div aria-hidden="true" style="width:9px;height:9px;border-radius:50%;background:{{ wsDotColor }};animation:qt-pulse 2s ease-in-out infinite"></div>
+        <h1 style="margin:0;font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:700;letter-spacing:0.5px;color:#eef1f5">QUANT<span style="color:#60a5fa">/</span>TERMINAL</h1>
+        <div role="status" aria-live="polite" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:{{ wsStatusColor }};padding:3px 9px;border:1px solid {{ wsStatusColor }};border-radius:3px;white-space:nowrap">{{ wsStatusText }}</div>
+        <sc-if value="{{ cryptoProviderVisible }}">
+          <div title="Active crypto data provider (ACTIVE_PROVIDER) — Kraken > Bitstamp > Gemini > Binance, auto-failover/recovery" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#7b8494;padding:3px 9px;border:1px solid #1e2530;border-radius:3px;white-space:nowrap">{{ cryptoProviderLabel }}</div>
+        </sc-if>
+        <sc-if value="{{ wsOffline }}">
+          <button onClick="{{ reconnectWS }}" style="cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:11px;padding:3px 9px;border-radius:3px;border:1px solid #60a5fa;color:#60a5fa;background:transparent">Reconnect</button>
+        </sc-if>
+      </div>
+      <!-- Clock sits under the title now, at the start of the header. -->
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#7b8494;white-space:nowrap;margin-top:6px;padding-left:21px">{{ clockText }} UTC</div>
     </div>
-    <nav aria-label="Symbols" style="display:flex;gap:6px;flex-wrap:wrap;max-width:640px">
-      <sc-for list="{{ symbolChips }}" as="chip" hint-placeholder-count="10">
-        <button onClick="{{ chip.onClick }}" style="{{ chip.style }}">{{ chip.label }}</button>
-      </sc-for>
-    </nav>
-    <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#7b8494;white-space:nowrap">{{ clockText }} UTC</div>
+
+    <!-- Symbol navigator moved to the end of the header, led by the active
+         ticker so the current selection is readable without scanning the
+         chips for the highlighted one. -->
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;margin-left:auto">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span aria-hidden="true" style="display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:{{ symbolBadgeColor }};color:#0a0d12;font-weight:700;font-size:12px">{{ symbolBadgeGlyph }}</span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:17px;font-weight:700;color:#eef1f5;letter-spacing:0.5px">{{ selectedLabel }}</span>
+      </div>
+      <nav aria-label="Symbols" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:640px">
+        <sc-for list="{{ symbolChips }}" as="chip" hint-placeholder-count="10">
+          <button onClick="{{ chip.onClick }}" style="{{ chip.style }}">{{ chip.label }}</button>
+        </sc-for>
+      </nav>
+    </div>
   </header>
 
   <main>
@@ -144,7 +174,13 @@
 
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px">
     <div style="background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:18px">
-      <h2 style="margin:0 0 14px;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">GLOBAL SENTIMENT &amp; MARKET HEALTH</h2>
+      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 12px;margin-bottom:14px">
+        <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">GLOBAL SENTIMENT &amp; MARKET HEALTH</h2>
+        <div style="display:flex;align-items:center;gap:7px">
+          <span aria-hidden="true" style="display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:{{ symbolBadgeColor }};color:#0a0d12;font-weight:700;font-size:11px">{{ symbolBadgeGlyph }}</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:#c7ccd6;letter-spacing:0.5px">{{ selectedLabel }}</span>
+        </div>
+      </div>
       <div style="display:flex;align-items:center;gap:24px">
         <div role="img" aria-label="{{ sentimentAriaLabel }}" style="position:relative;width:120px;height:70px;overflow:hidden">
           <div aria-hidden="true" style="position:absolute;width:120px;height:120px;border-radius:50%;background:conic-gradient(from 180deg,#f87171 0deg,#fbbf24 90deg,#34d399 180deg);clip-path:inset(0 0 50% 0)"></div>
@@ -154,10 +190,6 @@
         <div style="flex:1;min-width:0">
           <div style="font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:700;color:{{ sentimentColor }}">{{ sentimentLabel }}</div>
           <div style="font-size:12px;color:#7b8494;margin-top:4px">Composite score {{ sentimentScore }}/100</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px;margin-left:auto">
-          <span aria-hidden="true" style="display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:50%;background:{{ symbolBadgeColor }};color:#0a0d12;font-weight:700;font-size:17px">{{ symbolBadgeGlyph }}</span>
-          <span style="font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:600;color:#c7ccd6">{{ symbolBadgeText }}</span>
         </div>
       </div>
       <div style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px 20px;margin-top:16px;padding-top:14px;border-top:1px solid #1e2530">
@@ -243,10 +275,35 @@
           </sc-for>
         </div>
 
-        <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin:10px 0;padding:8px;border-top:1px solid #1e2530;border-bottom:1px solid #1e2530">
-          <span aria-hidden="true" style="font-size:14px;color:{{ midTickColor }}">{{ midTickArrow }}</span>
-          <span style="font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;color:{{ midTickColor }}">{{ midPriceText }}</span>
-          <span style="font-size:10px;color:#4a5568;letter-spacing:0.5px">MID</span>
+        <!-- Best ask ‖ bid/ask volume split ‖ best bid. The bar is the
+             cumulative quantity proportion across the visible book, so it
+             reads as "which side is currently stacked heavier". -->
+        <div style="display:flex;align-items:center;gap:12px;margin:10px 0;padding:10px 4px;border-top:1px solid #1e2530;border-bottom:1px solid #1e2530">
+          <div style="display:flex;align-items:center;gap:5px;white-space:nowrap">
+            <span aria-hidden="true" style="font-size:12px;color:#f87171">▼</span>
+            <span style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#f87171">{{ bestAskText }}</span>
+          </div>
+
+          <div style="flex:1;min-width:0">
+            <div role="img" aria-label="Book volume split: {{ askVolLabel }} ask, {{ bidVolLabel }} bid" style="display:flex;height:16px;border-radius:3px;overflow:hidden;background:#0d1015">
+              <div style="width:{{ askVolPct }}%;background:linear-gradient(90deg,#7f1d1d,#f87171);display:flex;align-items:center;justify-content:flex-start;padding-left:5px">
+                <span style="font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:#fff">{{ askVolLabel }}</span>
+              </div>
+              <div style="width:{{ bidVolPct }}%;background:linear-gradient(90deg,#34d399,#065f46);display:flex;align-items:center;justify-content:flex-end;padding-right:5px">
+                <span style="font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;color:#04231a">{{ bidVolLabel }}</span>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:center;gap:7px;margin-top:5px">
+              <span aria-hidden="true" style="font-size:11px;color:{{ midTickColor }}">{{ midTickArrow }}</span>
+              <span style="font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:{{ midTickColor }}">{{ midPriceText }}</span>
+              <span style="font-size:9px;color:#4a5568;letter-spacing:0.5px">MID</span>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:5px;white-space:nowrap">
+            <span style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#34d399">{{ bestBidText }}</span>
+            <span aria-hidden="true" style="font-size:12px;color:#34d399">▲</span>
+          </div>
         </div>
 
         <div style="display:flex;flex-direction:column;gap:4px">
@@ -315,8 +372,8 @@
        rather than stretching across the row. Axis figures are HTML overlaid
        on the SVG, not <text> inside it: the paths use
        preserveAspectRatio="none", which would stretch any embedded text. -->
-  <div style="display:flex;margin-bottom:16px">
-    <div style="width:fit-content;min-width:min(100%,420px);max-width:100%;background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
+  <div style="margin-bottom:16px">
+    <div style="width:100%;box-sizing:border-box;background:#12161d;border:1px solid #1e2530;border-radius:6px;padding:16px">
       <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:4px 12px;margin-bottom:8px">
         <h2 style="margin:0;font-size:11px;letter-spacing:1px;color:#7b8494;font-weight:600">DEPTH CHART · {{ selectedLabel }}</h2>
         <sc-if value="{{ pivotAvailable }}">
@@ -326,21 +383,34 @@
         </sc-if>
       </div>
       <sc-if value="{{ orderBookAvailable }}">
-        <div style="position:relative">
-          <svg viewBox="0 0 300 220" style="display:block;width:100%;height:260px" preserveAspectRatio="none" role="img" aria-label="{{ depthChartTitle }}">
-            <title>{{ depthChartTitle }}</title>
-            <path d="{{ depthBidPath }}" fill="rgba(52,211,153,0.18)" stroke="#34d399" stroke-width="1.5"></path>
-            <path d="{{ depthAskPath }}" fill="rgba(248,113,113,0.18)" stroke="#f87171" stroke-width="1.5"></path>
-            <line x1="150" y1="0" x2="150" y2="220" stroke="#2a3342" stroke-dasharray="3,3"></line>
-          </svg>
-          <span aria-hidden="true" style="position:absolute;top:0;left:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:#4a5568">QTY {{ depthBidCumText }}</span>
-          <span aria-hidden="true" style="position:absolute;top:0;right:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:#4a5568">{{ depthAskCumText }}</span>
-          <span aria-hidden="true" style="position:absolute;bottom:0;left:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:#34d399">{{ depthLowText }}</span>
-          <span aria-hidden="true" style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);font-family:'JetBrains Mono',monospace;font-size:10px;color:#c7ccd6">{{ midPriceText }}</span>
-          <span aria-hidden="true" style="position:absolute;bottom:0;right:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:#f87171">{{ depthHighText }}</span>
+        <div style="display:flex;gap:8px">
+          <!-- Y axis: cumulative quantity, largest at the top since both
+               curves are normalised to the heavier side. -->
+          <div aria-hidden="true" style="display:flex;flex-direction:column;justify-content:space-between;height:260px;font-family:'JetBrains Mono',monospace;font-size:9px;color:#4a5568;text-align:right;min-width:52px">
+            <sc-for list="{{ depthQtyTicks }}" as="t" hint-placeholder-count="5">
+              <span>{{ t }}</span>
+            </sc-for>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="position:relative">
+              <svg viewBox="0 0 300 220" style="display:block;width:100%;height:260px" preserveAspectRatio="none" role="img" aria-label="{{ depthChartTitle }}">
+                <title>{{ depthChartTitle }}</title>
+                <path d="{{ depthBidPath }}" fill="rgba(52,211,153,0.18)" stroke="#34d399" stroke-width="1.5"></path>
+                <path d="{{ depthAskPath }}" fill="rgba(248,113,113,0.18)" stroke="#f87171" stroke-width="1.5"></path>
+                <line x1="150" y1="0" x2="150" y2="220" stroke="#2a3342" stroke-dasharray="3,3"></line>
+              </svg>
+            </div>
+            <!-- X axis: price, bids left of mid, asks right. -->
+            <div aria-hidden="true" style="display:flex;justify-content:space-between;margin-top:6px;font-family:'JetBrains Mono',monospace;font-size:9px;color:#4a5568">
+              <sc-for list="{{ depthPriceTicks }}" as="t" hint-placeholder-count="5">
+                <span style="color:{{ t.color }}">{{ t.text }}</span>
+              </sc-for>
+            </div>
+          </div>
         </div>
-        <div style="display:flex;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:1px solid #1e2530;font-size:10px;color:#4a5568">
-          <span>PRICE →</span><span>cumulative QTY from mid outward</span>
+        <div style="display:flex;flex-wrap:wrap;gap:4px 16px;justify-content:space-between;margin-top:10px;padding-top:8px;border-top:1px solid #1e2530;font-size:10px;color:#4a5568">
+          <span>PRICE (bids ← mid → asks)</span>
+          <span>Y: cumulative QTY · <span style="color:#34d399">bids {{ depthBidCumText }}</span> · <span style="color:#f87171">asks {{ depthAskCumText }}</span></span>
         </div>
       </sc-if>
       <sc-if value="{{ orderBookUnavailable }}">
@@ -1430,11 +1500,26 @@ class Component extends DCLogic {
       pivotRow('R2', s.askPivots.level2, 'r', HALF),
       pivotRow('R1', s.askPivots.level1, 'r', DYN),
     ];
+    // Mirrored ladder: S1 sits directly under the mid and S3 furthest below,
+    // so distance from the mid grows outward on both sides (R1/S1 adjacent,
+    // R3/S3 at the extremes). The resistance side keeps R1 nearest the mid
+    // by rendering R3 first — same geometry, read downward.
     const supportRows = [
-      pivotRow('S3', s.bidPivots.level3, 's', FROZEN),
-      pivotRow('S2', s.bidPivots.level2, 's', HALF.replace('R3', 'S3')),
       pivotRow('S1', s.bidPivots.level1, 's', DYN),
+      pivotRow('S2', s.bidPivots.level2, 's', HALF.replace('R3', 'S3')),
+      pivotRow('S3', s.bidPivots.level3, 's', FROZEN),
     ];
+
+    // Cumulative bid/ask split across the visible book, for the mid-section
+    // proportion bar. Uses the same levels the ladder renders, so the bar and
+    // the rows can never disagree.
+    const bidVol = s.bids.reduce((t, b) => t + b[1], 0);
+    const askVol = s.asks.reduce((t, a) => t + a[1], 0);
+    const totalVol = bidVol + askVol;
+    const askVolPct = totalVol > 0 ? (askVol / totalVol) * 100 : 50;
+    const bidVolPct = totalVol > 0 ? (bidVol / totalVol) * 100 : 50;
+    const bestAskText = s.asks[0] ? px(s.asks[0][0]) : '--';
+    const bestBidText = s.bids[0] ? px(s.bids[0][0]) : '--';
 
     const tickMap = {
       up:   { color: '#34d399', arrow: '▲' },
@@ -1453,6 +1538,24 @@ class Component extends DCLogic {
       wide:     { color: '#f87171', bg: 'rgba(248,113,113,0.18)', label: 'WIDE' },
       unknown:  { color: '#7b8494', bg: 'rgba(123,132,148,0.10)', label: '—' },
     }[tier];
+    // Depth chart axes. The y scale is normalised to the heavier side (see
+    // the book memo), so the top tick is that peak and the rest divide it
+    // evenly. Ticks are emitted top-down to match the SVG's origin.
+    const depthPeak = Math.max(depthBidCum || 0, depthAskCum || 0);
+    const depthQtyTicks = depthPeak > 0
+      ? [1, 0.75, 0.5, 0.25, 0].map(f => qt(depthPeak * f))
+      : ['--', '', '', '', '--'];
+    // Five price ticks: lowest bid, mid-bid, mid, mid-ask, highest ask.
+    const depthPriceTicks = (depthLowPrice != null && depthHighPrice != null && s.mid != null)
+      ? [
+          { text: px(depthLowPrice), color: '#34d399' },
+          { text: px((depthLowPrice + s.mid) / 2), color: '#34d399' },
+          { text: px(s.mid), color: '#c7ccd6' },
+          { text: px((s.mid + depthHighPrice) / 2), color: '#f87171' },
+          { text: px(depthHighPrice), color: '#f87171' },
+        ]
+      : [];
+
     // Symbol badge for the sentiment card's price block. Drawn in CSS rather
     // than loading exchange logos — no new img-src origin, nothing to 404.
     const badgeMap = { BTCUSD: ['₿', '#f7931a'], ETHUSD: ['Ξ', '#8c8fff'], XAUUSD: ['Au', '#d4af37'] };
@@ -1475,11 +1578,15 @@ class Component extends DCLogic {
       btcDomText: fx1(s.dominance.btc), btcDomPct: Math.min(100, s.dominance.btc || 0),
       ethDomText: fx1(s.dominance.eth), ethDomPct: Math.min(100, (s.dominance.eth || 0) * 2),
       mtfIsBull: mtfNet >= 1, netBiasText, netBiasColor,
-      symbolBadgeText: sym.label.replace('/', ''), symbolBadgeGlyph, symbolBadgeColor,
+      symbolBadgeGlyph, symbolBadgeColor,
       depthLowText: depthLowPrice != null ? px(depthLowPrice) : '--',
       depthHighText: depthHighPrice != null ? px(depthHighPrice) : '--',
       depthBidCumText: qt(depthBidCum), depthAskCumText: qt(depthAskCum),
+      depthQtyTicks, depthPriceTicks,
       resistanceRows, supportRows,
+      bestAskText, bestBidText,
+      askVolPct: askVolPct.toFixed(1), bidVolPct: bidVolPct.toFixed(1),
+      askVolLabel: `${Math.round(askVolPct)}%`, bidVolLabel: `${Math.round(bidVolPct)}%`,
       midPriceText, midTickColor, midTickArrow,
       pivotSpreadText, pivotSpreadColor, pivotSpreadBg, pivotSpreadLabel,
       pivotAvailable: isCrypto, pivotUnavailable: !isCrypto,
