@@ -1211,6 +1211,17 @@ class Component extends DCLogic {
     clearInterval(this.bookStaleWatchdog);
     if (this.bookConnection) { try { this.bookConnection.close(); } catch (e) {} this.bookConnection = null; }
     clearInterval(this.bookFlushTimer);
+    // A book update from the OLD connection can already be sitting here,
+    // received but not yet consumed by the flush timer's next 100ms tick
+    // (that gap is exactly what the timer is for). Without this, the NEW
+    // connection's first tick treats that stale, wrong-symbol book as
+    // legitimate data for the new symbol — since pivotState was reset to
+    // {} moments ago in changeSymbol, computePivots takes it as a fresh
+    // start and FREEZES level3 at the old symbol's price/qty. Caught live:
+    // switching BTC/USD -> ETH/USD -> BTC/USD left R3 stuck at ETH's exact
+    // price and quantity, indefinitely, because nothing on the BTC book
+    // could plausibly reach a size calibrated to ETH's typical bucket size.
+    this.pendingBook = null;
     if (this.unmounted) return;
     const provider = this.providerById(this.cryptoActiveId);
     const nativeSym = provider.bookSymbol[symbolId];
@@ -1289,8 +1300,11 @@ class Component extends DCLogic {
       let askPivots = this.state.askPivots, bidPivots = this.state.bidPivots, midTick = this.state.midTick;
       if (this.pivots) {
         this.pivotState = this.pivotState || { asks: {}, bids: {} };
-        askPivots = this.pivots.computePivots(asks, this.pivotState.asks);
-        bidPivots = this.pivots.computePivots(bids, this.pivotState.bids);
+        // mid/side let computePivots invalidate a retained level2 once price
+        // has crossed it, instead of holding a stale "qualified" wall
+        // indefinitely — see the staleness note above computePivots.
+        askPivots = this.pivots.computePivots(asks, this.pivotState.asks, { mid, side: 'asks' });
+        bidPivots = this.pivots.computePivots(bids, this.pivotState.bids, { mid, side: 'bids' });
         this.pivotState = { asks: askPivots, bids: bidPivots };
         midTick = this.pivots.tickDirection(mid, this.prevMid);
         // Only advance the reference once the mid actually moves, so a run of
@@ -1474,7 +1488,20 @@ class Component extends DCLogic {
       const bidRows = s.bids.map(([p, q]) => ({ price: p.toFixed(sym.base > 1000 ? 1 : 5), qty: q.toFixed(4), depthPct: Math.min(100, (q / maxQty) * 100) }));
       const askRows = [...s.asks].reverse().map(([p, q]) => ({ price: p.toFixed(sym.base > 1000 ? 1 : 5), qty: q.toFixed(4), depthPct: Math.min(100, (q / maxQty) * 100) }));
 
-      let depthBidPath = 'M0,220 L300,220 Z', depthAskPath = 'M0,220 L300,220 Z';
+      // Safety net for the SVG `d` attribute: a value that doesn't start with
+      // a moveto command throws a hard, visible browser console error and
+      // leaves the element unrendered — unlike most template values, which
+      // just show empty. Nothing found here could actually produce a bad
+      // path (the two assignments below are template literals that always
+      // open with a literal "M..."), but the failure mode if some future
+      // change to this block ever did is bad enough — a template placeholder
+      // leaking through unresolved renders exactly the error text
+      // `Expected moveto path command ('M' or 'm'), "{{ depthBidPath …"` —
+      // that it's worth guarding at the boundary rather than trusting every
+      // future edit to preserve the invariant by hand.
+      const FALLBACK_DEPTH_PATH = 'M0,220 L300,220 Z';
+      const safePath = (d) => (typeof d === 'string' && /^\s*[Mm]/.test(d)) ? d : FALLBACK_DEPTH_PATH;
+      let depthBidPath = FALLBACK_DEPTH_PATH, depthAskPath = FALLBACK_DEPTH_PATH;
       // Axis figures for the depth chart's labels. The paths themselves are
       // drawn with preserveAspectRatio="none", which would stretch any <text>
       // placed inside the SVG, so the labels are HTML positioned around it
@@ -1497,8 +1524,8 @@ class Component extends DCLogic {
         cum = 0;
         const askPts = s.asks.map((a, i) => { cum += a[1]; return [150 + (i / s.asks.length) * 150, y(cum)]; });
         depthAskCum = cum;
-        depthBidPath = `M0,220 L${bidPts.map(p => p.join(',')).join(' L')} L150,220 Z`;
-        depthAskPath = `M300,220 L${askPts.slice().reverse().map(p => p.join(',')).join(' L')} L150,220 Z`;
+        depthBidPath = safePath(`M0,220 L${bidPts.map(p => p.join(',')).join(' L')} L150,220 Z`);
+        depthAskPath = safePath(`M300,220 L${askPts.slice().reverse().map(p => p.join(',')).join(' L')} L150,220 Z`);
         depthLowPrice = s.bids[s.bids.length - 1][0];
         depthHighPrice = s.asks[s.asks.length - 1][0];
       }
@@ -1585,12 +1612,17 @@ class Component extends DCLogic {
     // this session. `dist` is still computed on each row (used by the
     // breach check's amber styling) but no longer drives position.
     // level2's note explains which of the four resolution paths it took, so
-    // an under-threshold or absent wall is never an unexplained blank.
-    const level2Note = (lvl, ref) => {
+    // an under-threshold or absent wall is never an unexplained blank. The
+    // floor is a live number now, not a fixed "50% of R3" — it's half the
+    // book's own current average bucket size, recomputed every update, so
+    // the note shows the actual value in play rather than a ratio that no
+    // longer describes the qualifying test.
+    const level2Note = (lvl) => {
       if (!lvl) return `no second wall in book`;
-      if (lvl.qualified === false) return `below 50% of ${ref}`;
-      if (lvl.widened) return `≥50% of ${ref} · grouped`;
-      return `updates at 50% of ${ref}`;
+      const floorText = lvl.floor != null ? qt(lvl.floor) : '--';
+      if (lvl.qualified === false) return `below floor ${floorText}`;
+      if (lvl.widened) return `≥floor ${floorText} · grouped`;
+      return `≥floor ${floorText}`;
     };
     const FROZEN = 'strongest · frozen';
     const DYN = 'live';
@@ -1610,12 +1642,12 @@ class Component extends DCLogic {
     // regardless of where price actually is relative to them.
     const resistanceRows = [
       pivotRow('R3', s.askPivots.level3, 'r', FROZEN),
-      pivotRow('R2', s.askPivots.level2, 'r', level2Note(s.askPivots.level2, 'R3')),
+      pivotRow('R2', s.askPivots.level2, 'r', level2Note(s.askPivots.level2)),
       pivotRow('R1', s.askPivots.level1, 'r', DYN),
     ];
     const supportRows = [
       pivotRow('S1', s.bidPivots.level1, 's', DYN),
-      pivotRow('S2', s.bidPivots.level2, 's', level2Note(s.bidPivots.level2, 'S3')),
+      pivotRow('S2', s.bidPivots.level2, 's', level2Note(s.bidPivots.level2)),
       pivotRow('S3', s.bidPivots.level3, 's', FROZEN),
     ];
 

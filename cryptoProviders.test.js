@@ -6,7 +6,7 @@
 // environment the real fetchKlines/connectBook implementations need.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROVIDERS, providerById, attemptWithFailover, applyKrakenLevels, topLevels, crc32, krakenBookChecksum } from './cryptoProviders.js';
+import { PROVIDERS, providerById, attemptWithFailover, applyKrakenLevels, topLevels, crc32, krakenBookChecksum, pruneToDepth, BOOK_DEPTH } from './cryptoProviders.js';
 
 test('PROVIDERS: priority order is Kraken -> Bitstamp -> Gemini -> Binance', () => {
   assert.deepEqual(PROVIDERS.map((p) => p.id), ['kraken', 'bitstamp', 'gemini', 'binance']);
@@ -132,6 +132,103 @@ test('applyKrakenLevels: a snapshot followed by updates changes the book — thi
   const afterRound2 = topLevels(bidMap, 'bids');
   assert.notDeepEqual(afterRound1, afterRound2, 'book must actually change between update rounds, not freeze');
   assert.deepEqual(afterRound2, [[100, 1.5], [98, 3]]);
+});
+
+// pruneToDepth: regression coverage for a live root-cause finding. An
+// independent shadow book — the exact production applyKrakenLevels/
+// topLevels/krakenBookChecksum, wired to a second, isolated Kraken
+// connection — mismatched 65% of real checksums. bidMap/askMap were found
+// growing unbounded (asks reaching 31 entries from a 10-entry snapshot)
+// because applyKrakenLevels only ever touches the exact prices a delta
+// names; Kraken does not reliably send an explicit qty:0 for every level
+// that silently falls out of its own top-10 window. A stale phantom level
+// left at its last-known price can still rank inside a naive top-10-by-price
+// computed from the bloated map, intermittently diverging from Kraken's
+// real current top-10 — matching the observed 35% coincidental match rate
+// exactly. Re-running the identical live A/B with maps trimmed to
+// BOOK_DEPTH after every delta: 0 mismatches across 465 consecutive updates.
+
+test('pruneToDepth: trims to exactly n entries, keeping the correct side', () => {
+  const bidMap = new Map(Array.from({ length: 15 }, (_, i) => [100 - i, 1])); // 100..86
+  const pruned = pruneToDepth(bidMap, 'bids', 10);
+  assert.equal(pruned.size, 10);
+  assert.deepEqual([...pruned.keys()].sort((a, b) => b - a), [100, 99, 98, 97, 96, 95, 94, 93, 92, 91]);
+});
+
+test('pruneToDepth: a map already at or under n is unchanged in content', () => {
+  const map = new Map([[100, 1], [99, 2]]);
+  const pruned = pruneToDepth(map, 'bids', 10);
+  assert.deepEqual([...pruned.entries()].sort((a, b) => b[0] - a[0]), [[100, 1], [99, 2]]);
+});
+
+test('pruneToDepth: discards stale levels that rank outside the true top-N, not just the newest additions', () => {
+  // Simulates the actual failure mode: a level from an old snapshot (95)
+  // never got an explicit removal as the market moved up, so it's still
+  // sitting in the map long after it fell out of Kraken's real top-10.
+  const bidMap = new Map([
+    [95, 9], // stale — was top-of-book long ago, never evicted
+    ...Array.from({ length: 10 }, (_, i) => [110 - i, 1]), // current real top-10: 110..101
+  ]);
+  const pruned = pruneToDepth(bidMap, 'bids', BOOK_DEPTH);
+  assert.equal(pruned.has(95), false, 'stale level must be dropped even though it was in the map');
+  assert.equal(pruned.size, BOOK_DEPTH);
+});
+
+test('BOOK_DEPTH matches the checksum spec assumption of full top-10 depth', () => {
+  assert.equal(BOOK_DEPTH, 10);
+});
+
+test('regression: pruning every delta keeps the map bounded across many rounds; never pruning lets it balloon exactly as observed live', () => {
+  // Models actual usage, not a single retroactive prune on an already-
+  // contaminated snapshot: krakenConnectBook prunes after EVERY delta, so
+  // the map can never accumulate past BOOK_DEPTH per side in the first
+  // place — that's *why* stale levels can't linger indefinitely, not
+  // because pruneToDepth can tell "stale" from "real" after the fact.
+  // Simulates 12 rounds of new levels arriving, each strictly better-priced
+  // than everything before it (a bid price walking steadily upward, as
+  // observed on the live BTC/USD book).
+  let unprunedMap = new Map(Array.from({ length: 10 }, (_, i) => [100 - i, 1])); // 100..91
+  let prunedMap = new Map(unprunedMap);
+  for (let round = 1; round <= 12; round++) {
+    const newLevel = [{ price: 100 + round, qty: 1 }];
+    applyKrakenLevels(unprunedMap, newLevel);
+    applyKrakenLevels(prunedMap, newLevel);
+    prunedMap = pruneToDepth(prunedMap, 'bids', BOOK_DEPTH);
+  }
+  // Unpruned: every round adds a level and nothing ever leaves — this is
+  // exactly the 10 -> 31/18 growth captured live.
+  assert.equal(unprunedMap.size, 22, '10 original + 12 added, nothing evicted — the bug, reproduced');
+  // Pruned: bounded at BOOK_DEPTH after every round, and correctly holds
+  // the true current top-10 (the 12 new arrivals, since there were more
+  // than 10 of them, pushed every original level out).
+  assert.equal(prunedMap.size, BOOK_DEPTH);
+  assert.deepEqual(
+    [...prunedMap.keys()].sort((a, b) => b - a),
+    Array.from({ length: 10 }, (_, i) => 112 - i), // 112..103, the 10 best of the 12 additions
+  );
+  // Note: this monotonic scenario doesn't by itself produce a wrong
+  // checksum — topLevels() still finds the correct top-10 by price even
+  // inside the unpruned map's 22 entries, because every stale original
+  // (100..91) is strictly worse-priced than all 12 replacements. That's
+  // deliberate: it isolates the SIZE claim. The checksum consequence — a
+  // stale level winning a rank it shouldn't — needs a stale price that
+  // falls *inside* the current top-10's range, covered next.
+});
+
+test('regression: an unbounded map lets a stale in-range phantom win a rank and corrupt the checksum', () => {
+  // Live capture: a bid level (95) that fell out of Kraken's tracked top-10
+  // without an explicit removal, still sitting in the accumulated map,
+  // priced *inside* the real current top-10's range (110..101) — so a naive
+  // top-10-by-price over the bloated map keeps it and evicts a real level
+  // (101) instead. This is what actually produced the live mismatches: not
+  // mere map growth, but growth that happens to include a level still
+  // competitive by price.
+  const trueTop10 = Array.from({ length: 10 }, (_, i) => [110 - i, 1]); // 110..101
+  const bloated = new Map([[105.5, 3], ...trueTop10]); // phantom ranks 5th by price
+  const asks = [[200, 1]];
+  const checksumTrue = krakenBookChecksum(asks, trueTop10, 1, 8);
+  const checksumFromBloated = krakenBookChecksum(asks, topLevels(bloated, 'bids', 10), 1, 8);
+  assert.notEqual(checksumFromBloated, checksumTrue, 'an in-range phantom displaces a real level and changes the checksum — the live bug, reproduced at the unit level');
 });
 
 test('topLevels: bids sort descending (best/highest first), asks ascending (best/lowest first)', () => {

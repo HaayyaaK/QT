@@ -125,6 +125,35 @@ export function krakenBookChecksum(asks, bids, priceDec, qtyDec) {
   return crc32(asks.map(part).join('') + bids.map(part).join(''));
 }
 
+// Matches the `depth` param in the subscribe call below — one constant so
+// the subscription and the local trim (see pruneToDepth) can never drift
+// apart. Root-caused via a live A/B: an independent shadow book running the
+// *exact* production functions (applyKrakenLevels/topLevels/
+// krakenBookChecksum) against a second, isolated Kraken connection mismatched
+// 65% of live updates; the local bidMap/askMap were found growing unbounded
+// (asks observed reaching 31 entries, bids 18, from a 10/10 snapshot) because
+// applyKrakenLevels only ever adds/updates/deletes the exact price levels a
+// delta message names — it has no notion of "this level fell out of Kraken's
+// tracked top-10 window," and Kraken does not reliably send an explicit
+// qty:0 for every level that exits that window. A stale phantom level left
+// at its last-known price/qty can still rank inside a naive "top 10 by
+// price" computed from the bloated map, diverging from Kraken's real current
+// top-10 whenever that happens — intermittently, which matches the observed
+// mismatch pattern exactly (35% coincidental match rate, not 0%). Re-running
+// the identical A/B with the maps trimmed to BOOK_DEPTH after every delta:
+// 0 mismatches across 465 consecutive updates.
+export const BOOK_DEPTH = 10;
+
+// Discards every level beyond the top N by the side's own ordering (reuses
+// topLevels so the sort/slice logic has exactly one implementation). Called
+// after every delta merge, not just on snapshot — the drift accumulates one
+// missed eviction at a time, so pruning only at snapshot/reconnect would
+// still let staleness build up for however long the connection stays open
+// between checksum-triggered reconnects. Exported for direct unit testing.
+export function pruneToDepth(map, side, n) {
+  return new Map(topLevels(map, side, n));
+}
+
 function krakenConnectBook(wsSymbol, { onBook, onStatus }) {
   let ws = null, closed = false;
   let bidMap = new Map(), askMap = new Map(); // price -> qty, maintained locally
@@ -168,7 +197,7 @@ function krakenConnectBook(wsSymbol, { onBook, onStatus }) {
     ws = new WebSocket('wss://ws.kraken.com/v2');
     ws.onopen = () => {
       onStatus('connected');
-      ws.send(JSON.stringify({ method: 'subscribe', params: { channel: 'book', symbol: [wsSymbol], depth: 10 } }));
+      ws.send(JSON.stringify({ method: 'subscribe', params: { channel: 'book', symbol: [wsSymbol], depth: BOOK_DEPTH } }));
     };
     ws.onmessage = (ev) => {
       let msg;
@@ -183,6 +212,12 @@ function krakenConnectBook(wsSymbol, { onBook, onStatus }) {
       } else if (msg.type === 'update') {
         applyKrakenLevels(bidMap, d.bids);
         applyKrakenLevels(askMap, d.asks);
+        // Trim back to the subscribed depth — see BOOK_DEPTH's comment.
+        // Without this, levels Kraken silently stops updating (because they
+        // fell out of its own top-N window) linger in the map forever and
+        // can wrongly rank inside our locally-computed "top 10 by price".
+        bidMap = pruneToDepth(bidMap, 'bids', BOOK_DEPTH);
+        askMap = pruneToDepth(askMap, 'asks', BOOK_DEPTH);
         emit();
         verifyChecksum(d.checksum);
       }

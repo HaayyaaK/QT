@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { groupLevels, computePivots, tickDirection, spreadTier } from './pivotLevels.js';
+import { groupLevels, computePivots, tickDirection, spreadTier, dynamicFloor } from './pivotLevels.js';
 
 test('groupLevels: sums quantity per bucket and reports the dominant price', () => {
   // Two clusters: ~100 with a 5.0 wall, ~110 with a 2.0 wall
@@ -47,15 +47,17 @@ test('level3 moves when a new grouped quantity reaches or exceeds it', () => {
   assert.equal(bigger.level3.price, 900);
 });
 
-test('level2 updates only when a bucket breaches 50% of level3', () => {
+test('level2 updates only when a bucket clears the dynamic floor', () => {
   const base = computePivots([[100, 10], [200, 6]], {});
   assert.equal(base.level3.qty, 10);
-  assert.equal(base.level2.price, 200, '6 >= 50% of 10, so it qualifies');
+  // floor = avg([10,6]) * 0.5 = 4; 6 >= 4 clears it.
+  assert.equal(base.level2.price, 200, '6 clears the floor (avg([10,6])*0.5 = 4)');
 
-  // Now a book whose non-level3 buckets are all under half of level3 (10):
-  // level2 must retain its previous value rather than dropping to a weak level.
+  // Now a book whose non-level3 bucket (2) is under the floor recomputed
+  // from THIS book (avg([10,2])*0.5 = 3; 2 < 3): level2 must retain its
+  // previous value rather than dropping to a weak level.
   const next = computePivots([[100, 10], [700, 2]], base);
-  assert.equal(next.level2.price, 200, 'retained — 2 is below the 5.0 threshold');
+  assert.equal(next.level2.price, 200, 'retained — 2 is below the recomputed floor of 3');
 });
 
 test('level1 is fully dynamic and never collides with level2/level3', () => {
@@ -74,29 +76,41 @@ test('level1 is fully dynamic and never collides with level2/level3', () => {
 
 test('level2 falls back to the runner-up, flagged below threshold, on a thin book', () => {
   // One wall dwarfs everything — the exact production case where S2 rendered
-  // blank: 50% of 10 is 5, and nothing else is close.
+  // a confident-looking wall out of dust (0.8, 8% of level3's size) under an
+  // earlier gap-based attempt at this. floor = avg([10,0.8,0.5])*0.5 ≈ 1.88;
+  // 0.8 doesn't clear it.
   const p = computePivots([[100, 10], [200, 0.8], [300, 0.5]], {});
   assert.equal(p.level3.qty, 10);
   assert.ok(p.level2, 'must not be blank');
-  assert.equal(p.level2.qualified, false, 'flagged as under threshold');
+  assert.equal(p.level2.qualified, false, 'flagged as under the floor');
   assert.equal(p.level2.price, 200, 'strongest remaining bucket');
   assert.notEqual(p.level1.price, p.level2.price, 'level1 still distinct');
 });
 
 test('widening the price window finds a wall the fine pass split apart', () => {
-  // Parcels spread across 500-620 total 6.2 (>= 50% of 10), but at the
-  // normal granularity they land in separate buckets whose best is only 4.0
-  // — under the threshold. Only the wider window sees the whole wall.
-  const levels = [[100, 10], [500, 2.2], [560, 2.0], [620, 2.0]];
+  // Three parcels (300/340/380, 1.4 each) stay in separate fine buckets and
+  // individually miss the fine floor (computed from [10, 1.4, 1.4, 1.4],
+  // avg 3.45, floor 1.775 — each parcel is under it). Widening to 4 coarse
+  // buckets merges two of them (340+380 -> 2.8), which clears the COARSE
+  // floor (computed from the coarser [10, 2.8, 1.4], avg 4.73, floor 2.37 —
+  // 2.8 clears it). Verified against the real module before writing this
+  // fixture, not derived by hand: a floor test behaves oppositely from the
+  // old gap/ratio tests here — aggregating RAISES a candidate's quantity,
+  // which helps it clear a floor (the opposite of a gap test, where
+  // aggregating raises the bar right along with the candidate).
+  const levels = [[100, 10], [300, 1.4], [340, 1.4], [380, 1.4]];
+  const fine = groupLevels(levels, 8);
+  const fineFloor = dynamicFloor(fine);
   assert.ok(
-    Math.max(...groupLevels(levels, 8).filter(g => g.price !== 100).map(g => g.qty)) < 5,
-    'fixture must genuinely miss the threshold at fine granularity'
+    fine.filter(g => g.price !== 100).every(g => g.qty < fineFloor),
+    'fixture must genuinely miss the floor at fine granularity'
   );
   const p = computePivots(levels, {});
   assert.equal(p.level3.qty, 10);
-  assert.equal(p.level2.qualified, true, 'aggregated parcels clear 50%');
+  assert.equal(p.level2.qualified, true, 'aggregated parcels clear the coarse floor');
   assert.equal(p.level2.widened, true, 'and it took the wider window to see it');
-  assert.ok(p.level2.qty >= 5, `expected >=5, got ${p.level2.qty}`);
+  assert.equal(p.level2.price, 340, 'the merged bucket, reported at its largest resting order');
+  assert.equal(p.level2.qty, 2.8, '340 + 380 combined');
 });
 
 test('a genuinely qualified level2 is never downgraded to the fallback', () => {
@@ -115,6 +129,81 @@ test('an unqualified level2 is replaced as soon as a real wall appears', () => {
   const recovered = computePivots([[100, 10], [500, 7]], thin);
   assert.equal(recovered.level2.price, 500);
   assert.equal(recovered.level2.qualified, true);
+});
+
+// Regression coverage for a design mistake caught before it shipped: a
+// gap-based qualifying test ("candidate must be smaller than level3 by some
+// dynamic amount") was tried first, from a literal reading of the original
+// spec. It let dust — a bucket at 8% of level3's size — qualify as a
+// confident wall, because a BIGGER size difference from level3 passed the
+// gap test more easily. That's backwards: a floor answers "is this
+// significant", which is the actual question; a gap only answers "is this
+// different from level3", which dust trivially satisfies.
+test('dynamicFloor scales with the book, not with level3 specifically', () => {
+  // Same relative shape (one dominant wall, rest under 10% of it), two very
+  // different absolute scales — BTC-sized quantities and FX-notional-sized
+  // quantities. The floor must scale with each book's own units.
+  const btcLike = groupLevels([[63000, 12], [63010, 0.9], [63020, 0.7]], 8);
+  const fxLike = groupLevels([[1.085, 2_400_000], [1.086, 180_000], [1.087, 140_000]], 8);
+  const btcFloor = dynamicFloor(btcLike);
+  const fxFloor = dynamicFloor(fxLike);
+  assert.ok(btcFloor > 1 && btcFloor < 10, `BTC floor should be BTC-scale, got ${btcFloor}`);
+  assert.ok(fxFloor > 100_000 && fxFloor < 2_000_000, `FX floor should be notional-scale, got ${fxFloor}`);
+});
+
+test('dust does not qualify as level2 no matter how far it is from level3', () => {
+  // The exact failure mode the gap-based attempt had: an 8%-of-level3 bucket
+  // (10 vs 0.8) must NOT read as a confident, non-muted wall.
+  const p = computePivots([[100, 10], [200, 0.8]], {});
+  assert.equal(p.level2.qualified, false, 'dust must not qualify merely for being far from level3 in size');
+});
+
+// Staleness invalidation: live production observation. A bid-side (support)
+// level2 sat at a fixed price 24-32 points above a falling mid — on the ASK
+// side of the market — for a sustained window, still rendered with full
+// "qualified" confidence, because retention (the branch covered by the two
+// tests above) never re-checked whether the retained value was still
+// plausible once the market moved past it.
+
+test('a retained ask-side level2 is invalidated once mid rises above it (no longer real resistance)', () => {
+  const base = computePivots([[100, 10], [102, 6]], {}, { mid: 99, side: 'asks' });
+  assert.equal(base.level2.price, 102);
+  assert.equal(base.level2.qualified, true);
+  // Book thins (nothing new qualifies) AND mid has risen past 102 — the
+  // retained ask level is now below the market, i.e. not resistance at all.
+  const next = computePivots([[100, 10], [700, 0.2]], base, { mid: 105, side: 'asks' });
+  assert.notEqual(next.level2 && next.level2.price, 102, 'stale, wrong-side retention must not survive');
+});
+
+test('a retained bid-side level2 is invalidated once mid falls below it (no longer real support)', () => {
+  const base = computePivots([[100, 10], [98, 6]], {}, { mid: 99, side: 'bids' });
+  assert.equal(base.level2.price, 98);
+  const next = computePivots([[100, 10], [10, 0.2]], base, { mid: 95, side: 'bids' });
+  assert.notEqual(next.level2 && next.level2.price, 98, 'stale, wrong-side retention must not survive');
+});
+
+test('a retained level2 that is still on the correct side of mid survives exactly as before', () => {
+  const base = computePivots([[100, 10], [102, 6]], {}, { mid: 99, side: 'asks' });
+  // mid has moved but 102 is still >= mid — genuinely still resistance.
+  const next = computePivots([[100, 10], [700, 0.2]], base, { mid: 101, side: 'asks' });
+  assert.equal(next.level2.price, 102, 'still on the correct side — retention holds');
+  assert.equal(next.level2.qualified, true);
+});
+
+test('omitting mid/side disables the staleness check entirely (backward compatible)', () => {
+  // Old call sites (or a caller that genuinely has no mid yet) keep the
+  // pre-existing unconditional-retention behaviour.
+  const base = computePivots([[100, 10], [200, 6]], {});
+  const next = computePivots([[100, 10], [700, 0.2]], base); // no opts at all
+  assert.equal(next.level2.price, 200, 'no mid/side supplied — retention is unconditional, as before');
+});
+
+test('staleness check also applies on the empty-book early-return path', () => {
+  const base = computePivots([[100, 10], [102, 6]], {}, { mid: 99, side: 'asks' });
+  assert.equal(base.level2.price, 102);
+  // Book goes fully empty AND mid has moved past the retained level.
+  const next = computePivots([], base, { mid: 105, side: 'asks' });
+  assert.equal(next.level2, null, 'stale retained value must not survive the empty-book path either');
 });
 
 test('a single-bucket book yields no level2 at all (explicit empty state)', () => {
