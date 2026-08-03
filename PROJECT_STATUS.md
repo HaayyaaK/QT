@@ -177,6 +177,29 @@ the book is a different exchange's), *and* at the venue's session roll via
 "today's walls" means for an order book: L2 levels carry no timestamps and no history, so there
 is no previous-day data to filter; the session boundary is the only honest way to scope them.
 
+## Infrastructure changes made outside this repo (2026-08-03)
+
+Recorded here because they are load-bearing for production but live in files this repository
+does not track.
+
+- **`C:\proxy-server\server.js` — `.env` resolution.** It called bare `process.loadEnvFile()`,
+  which reads `./.env` relative to `process.cwd()`, *not* the script. Launched from any other
+  directory — a service wrapper, a scheduled task, another shell — the proxy started with zero
+  API keys and returned 501 on every keyed route while otherwise looking healthy (it still
+  logged "listening", and the keyless Yahoo FX path kept working, so nothing looked wrong).
+  Now resolved from `import.meta.url`, making the long-standing "next to server.js" comment
+  true. Verified by running it from `C:\` with all four key pools loading.
+- **IIS virtual directory.** `/vendor` → `C:\inetpub\wwwroot\assets` for the self-hosted fonts.
+  Deliberately not `/assets`, which would shadow this site's own `assets\` folder and 404 the
+  PWA manifest and icons regardless of what is on disk. Applied via `iis-setup.ps1`, so it is
+  reproducible rather than a one-off console change.
+
+## Deployment note
+
+There is no separate deploy step. IIS serves `TradingDashboard.html` directly from the working
+directory, so a saved file is live immediately at `https://fx.hayyaak.com`. Git is version
+control here, not a deployment pipeline. Remote: `https://github.com/HaayyaaK/QT` (public).
+
 ## Open items
 
 - ~~Failover chain not yet validated on production.~~ **Done 2026-08-02, see below.**
@@ -191,6 +214,15 @@ is no previous-day data to filter; the session boundary is the only honest way t
   scope for this release (weekly gating removes the large majority of the noise); documented
   user-facing in README "Known limitations" #7. Remaining work is fixed-date plus
   Easter-relative holiday tables per venue.
+- **No CI.** `npm test` (74 tests) is manual only — there is no workflow in the repo, so nothing
+  catches a regression automatically. Deliberate for now given the contributor count; revisit if
+  that changes. Node's built-in runner needs no dependencies or secrets, so a workflow would be
+  a few lines.
+- **`sessionKey()`'s FX/metals branch is currently unreachable from the pivot card.** The pivot
+  state is computed inside the crypto book-flush timer, and `connectWS()` returns early for
+  non-crypto symbols, so in practice only the crypto 00:00 UTC roll ever fires a pivot reset.
+  The FX 17:00-local branch is correct and tested, and becomes live the moment an FX order book
+  exists. `isMarketOpen()` from the same module *is* fully live, gating the alert stream.
 - **Watch post-deploy: `alertFlags` across a session boundary.** The gate returns early without
   writing `alertFlags`, so flags stay frozen at the last open-market evaluation. Analysis says
   this is correct — alert conditions are pure functions of the candle array, which does not

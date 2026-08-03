@@ -323,7 +323,7 @@ The proxy has its own separate test suite — see its README.
 
 ## Production deployment (IIS)
 
-Target hostnames: `forex.hayyaak.com`, `fx.hayyaak.com`, `hayyaak.trade`.
+Live at **`https://fx.hayyaak.com`** (the site binds this hostname only).
 Two files make this work, both in this repo:
 
 - **`web.config`** — IIS config for this site: default document
@@ -345,25 +345,49 @@ Two files make this work, both in this repo:
   re-run) and doesn't touch the existing `Default Web Site` at all — new
   site, new dedicated app pool, isolated physical path.
 
-**What's confirmed vs. what still needs your action** (checked 2026-08-01):
+`iis-setup.ps1` also maps one virtual directory: **`/vendor` →
+`C:\inetpub\wwwroot\assets`**, the shared folder holding the self-hosted
+Inter and JetBrains Mono woff2 files. It is deliberately *not* mounted at
+`/assets` — the site has its own `assets\` folder (PWA manifest, icons) and a
+vdir there would shadow it completely, 404'ing those files regardless of
+what's on disk. `web.config` registers the `.webmanifest` and `.svg` MIME
+types, without which IIS returns 404.3 for them.
+
+**Deployment status** (verified 2026-08-03):
 
 | | Status |
 |---|---|
-| `forex.hayyaak.com` DNS | ✅ resolves (Cloudflare IPs, same pattern as `hayyaak.com`) |
-| `hayyaak.trade` DNS | ✅ resolves (Cloudflare IPs, different zone) |
 | `fx.hayyaak.com` DNS | ✅ resolves via Cloudflare |
-| Cloudflare → this machine routing | ❓ unverified — DNS resolving to Cloudflare only confirms Cloudflare is the edge, not that these hostnames are proxied to *this* origin. Check in the Cloudflare dashboard. |
-| Cloudflare SSL/TLS mode | ❓ unverified — if it's "Flexible", the http-only IIS bindings `iis-setup.ps1` creates are correct as-is. If "Full"/"Full (strict)", this box needs its own certificate bound to real HTTPS bindings, which `iis-setup.ps1` does not create. |
-| Router/firewall reaching this box on 80/443 | ❓ unverified — can't be checked from inside the machine |
-| IIS site + ARR reverse-proxy | ⏳ ready to create — run `iis-setup.ps1` |
-| Proxy (`C:\proxy-server`) | ✅ running, hardened to loopback-only, all 4 provider keys configured |
+| Cloudflare → this machine routing | ✅ confirmed — the dashboard loads over `https://fx.hayyaak.com` end to end |
+| IIS site + app pool + ARR reverse-proxy | ✅ created and serving (`iis-setup.ps1` has been run) |
+| `/vendor` fonts + `/assets` manifest and icons | ✅ all serving with correct MIME types |
+| Proxy (`C:\proxy-server`) | ✅ running, loopback-only, all 4 provider keys configured |
+| Crypto failover chain + 45s cooldown | ✅ validated against the live box — see `PROJECT_STATUS.md` |
+| Cloudflare SSL/TLS mode | ❓ unverified — if "Flexible", the http-only bindings `iis-setup.ps1` creates are correct as-is. If "Full"/"Full (strict)", this box needs its own certificate bound to real HTTPS bindings, which `iis-setup.ps1` does not create. |
+
+Note there is no separate deploy step: IIS serves `TradingDashboard.html`
+directly from this working directory, so a saved file is live immediately.
+Git here is version control, not a deployment pipeline.
+
+### PWA manifest and icons
+
+`assets/site.webmanifest` carries the install metadata (name, theme/background
+`#0a0d12`, `display: standalone`) and references the 192/512 PNG icons plus an
+SVG and a maskable SVG whose artwork stays inside Android's 80% safe zone.
+`TradingDashboard.html` links it with a **relative** href, because this file is
+served both from the site root (`fx.hayyaak.com/`) and from a subpath on the
+default site — a root-absolute path would only resolve on one of them.
+
+Two things are required for it to load rather than fail silently: the CSP
+declares `manifest-src 'self'` (the page's `default-src 'none'` blocks manifest
+fetches outright), and `web.config` maps the `.webmanifest` MIME type.
 
 Once `iis-setup.ps1` has been run and the proxy is running, verify the
 reverse-proxy path end-to-end **from this machine**, independent of
 DNS/Cloudflare/firewall:
 
 ```
-curl.exe -H "Host: forex.hayyaak.com" http://127.0.0.1/api/fx/klines?symbol=EURUSD
+curl.exe -H "Host: fx.hayyaak.com" http://127.0.0.1/api/fx/klines?symbol=EURUSD
 ```
 
 A real klines JSON response back confirms IIS → ARR → the Node proxy is
