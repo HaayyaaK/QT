@@ -408,8 +408,8 @@
             <div style="position:relative">
               <svg viewBox="0 0 300 220" style="display:block;width:100%;height:260px" preserveAspectRatio="none" role="img" aria-label="{{ depthChartTitle }}">
                 <title>{{ depthChartTitle }}</title>
-                <path d="{{ depthBidPath }}" fill="rgba(52,211,153,0.18)" stroke="#34d399" stroke-width="1.5"></path>
-                <path d="{{ depthAskPath }}" fill="rgba(248,113,113,0.18)" stroke="#f87171" stroke-width="1.5"></path>
+                <path ref="{{ depthBidPathRef }}" d="M0,220 L300,220 Z" fill="rgba(52,211,153,0.18)" stroke="#34d399" stroke-width="1.5"></path>
+                <path ref="{{ depthAskPathRef }}" d="M0,220 L300,220 Z" fill="rgba(248,113,113,0.18)" stroke="#f87171" stroke-width="1.5"></path>
                 <line x1="150" y1="0" x2="150" y2="220" stroke="#2a3342" stroke-dasharray="3,3"></line>
               </svg>
             </div>
@@ -665,6 +665,17 @@ class Component extends DCLogic {
     this.heatmapRef = React.createRef();
     this.calendarRef = React.createRef();
     this.newsRef = React.createRef();
+    // Depth-chart <path> nodes: the `d` attribute is set imperatively in
+    // applyDepthPaths() rather than bound in markup, so the raw HTML source
+    // never contains a template placeholder inside `d="..."`. Chrome's
+    // native SVG-attribute parser validates `d` while building the initial
+    // DOM tree, before dc-runtime has compiled anything — a literal
+    // `{{ depthBidPath }}` there throws a real, user-visible console error
+    // at that moment even though the value dc-runtime would have computed
+    // is always valid. Keeping the static markup at a valid default and
+    // pushing the real path in after mount/update sidesteps that entirely.
+    this.depthBidPathRef = React.createRef();
+    this.depthAskPathRef = React.createRef();
     this.cache = {};
     this.alertFlags = {};
     this.ta = null;
@@ -734,7 +745,23 @@ class Component extends DCLogic {
     };
   }
 
+  // Pushes the depth-chart path data computed in render() onto the actual
+  // DOM nodes. Runs after every commit (mount and update) since the SVG
+  // markup itself holds a static placeholder `d`, never a bound value —
+  // see the ref comment in the constructor.
+  applyDepthPaths() {
+    const bid = this.depthBidPathRef.current;
+    const ask = this.depthAskPathRef.current;
+    if (bid) bid.setAttribute('d', this._depthBidPath || 'M0,220 L300,220 Z');
+    if (ask) ask.setAttribute('d', this._depthAskPath || 'M0,220 L300,220 Z');
+  }
+
+  componentDidUpdate() {
+    this.applyDepthPaths();
+  }
+
   async componentDidMount() {
+    this.applyDepthPaths();
     const taEngine = await import('./taEngine.js');
     this.ta = taEngine;
     const { PROVIDERS, attemptWithFailover } = await import('./cryptoProviders.js');
@@ -1531,6 +1558,11 @@ class Component extends DCLogic {
       }
       return { bidRows, askRows, depthBidPath, depthAskPath, depthBidCum, depthAskCum, depthLowPrice, depthHighPrice };
     });
+    // Applied imperatively by applyDepthPaths() (componentDidMount /
+    // componentDidUpdate) rather than bound in markup — see the ref
+    // comment in the constructor.
+    this._depthBidPath = depthBidPath;
+    this._depthAskPath = depthAskPath;
 
     // ACTIVE_PROVIDER, exposed for debugging (spec section 10) — a small
     // label next to the connection status chip, visible only while a
@@ -1732,12 +1764,13 @@ class Component extends DCLogic {
       pivotSpreadText, pivotSpreadColor, pivotSpreadBg, pivotSpreadLabel,
       pivotAvailable: isCrypto, pivotUnavailable: !isCrypto,
       chartRef: this.chartRef, heatmapRef: this.heatmapRef, calendarRef: this.calendarRef, newsRef: this.newsRef,
+      depthBidPathRef: this.depthBidPathRef, depthAskPathRef: this.depthAskPathRef,
       widgetErrors: s.widgetErrors,
       retryChart: () => this.mountChart(), retryHeatmap: () => this.mountHeatmap(), retryCalendar: () => this.mountCalendar(), retryNews: () => this.mountNews(),
       orderBookAvailable: isCrypto, orderBookUnavailable: !isCrypto,
       spreadText: s.spread != null ? s.spread.toFixed(sym.base > 1000 ? 2 : 5) : '--',
       midPriceText: s.mid != null ? s.mid.toFixed(sym.base > 1000 ? 1 : 5) : '--',
-      bidRows, askRows, depthBidPath, depthAskPath,
+      bidRows, askRows,
       depthChartTitle: `Cumulative order book depth for ${sym.label}`,
       indicatorRows, dataSourceLabel, dataSourceColor,
       mtfRows, alertRows, noAlerts: alertRows.length === 0, alertCountText: `${alertRows.length} SIGNALS`,
