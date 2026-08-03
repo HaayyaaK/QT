@@ -1580,15 +1580,10 @@ class Component extends DCLogic {
         dist: (lvl && s.mid != null) ? Math.abs(lvl.price - s.mid) : Number.POSITIVE_INFINITY,
       };
     };
-    // Sorted so each side's nearest level ends up *adjacent to the spread
-    // divider* — a true mirror of the L2 ladder above. The ask block renders
-    // above the divider, so its nearest row has to be last (furthest first);
-    // the bid block renders below it, so its nearest row is first. Rows with
-    // no level (dist Infinity) sort to the far end rather than displacing a
-    // real wall, which for asks means the top.
-    const byProximity = (rows, nearestFirst) => rows.slice().sort(
-      (a, b) => nearestFirst ? a.dist - b.dist : b.dist - a.dist
-    );
+    // Rank order, not price order — see the note above resistanceRows/
+    // supportRows for why this reverts the proximity sort tried earlier in
+    // this session. `dist` is still computed on each row (used by the
+    // breach check's amber styling) but no longer drives position.
     // level2's note explains which of the four resolution paths it took, so
     // an under-threshold or absent wall is never an unexplained blank.
     const level2Note = (lvl, ref) => {
@@ -1599,26 +1594,30 @@ class Component extends DCLogic {
     };
     const FROZEN = 'strongest · frozen';
     const DYN = 'live';
-    // Both sides sorted nearest-the-mid first. Previously these were emitted
-    // in rank order, which only *looked* like a price ladder — measured live,
-    // the ask side was ordered by distance 0 times out of 10 samples, and a
-    // frozen R3 could render at the top while being the closest level to the
-    // mid. Rank still drives the tag and the persistence rules; it no longer
-    // drives vertical position.
-    // Asks: furthest first, so the nearest sits at the bottom of the block,
-    // directly against the divider — matching how the L2 book stacks asks.
-    const resistanceRows = byProximity([
+    // Rank order, stable by construction: each row's vertical position is
+    // tied to which persistence slot it occupies (level3/level2/level1), not
+    // to its current price. A distance-from-mid sort was tried twice this
+    // session — first "nearest at top both sides", then reversed on the ask
+    // side for literal divider-adjacency — and both were measured working
+    // exactly as built. But sorting by a value that changes on every book
+    // tick (mid, plus R1/S1's own fully-dynamic price) means the row order
+    // itself was live and could reshuffle between renders; combined with
+    // level2's stale-retention fallback occasionally parking a "qualified"
+    // wall far from the market (see the breached-tag investigation), that
+    // reshuffling read as erratic even though every underlying value was
+    // computed correctly. Rank order removes the dependency: R3 is always
+    // the top resistance row and S3 always the bottom support row, forever,
+    // regardless of where price actually is relative to them.
+    const resistanceRows = [
       pivotRow('R3', s.askPivots.level3, 'r', FROZEN),
       pivotRow('R2', s.askPivots.level2, 'r', level2Note(s.askPivots.level2, 'R3')),
       pivotRow('R1', s.askPivots.level1, 'r', DYN),
-    ], false);
-    // Bids: nearest first, so the nearest sits at the top of the block, also
-    // against the divider.
-    const supportRows = byProximity([
+    ];
+    const supportRows = [
       pivotRow('S1', s.bidPivots.level1, 's', DYN),
       pivotRow('S2', s.bidPivots.level2, 's', level2Note(s.bidPivots.level2, 'S3')),
       pivotRow('S3', s.bidPivots.level3, 's', FROZEN),
-    ], true);
+    ];
 
     // Cumulative bid/ask split across the visible book, for the mid-section
     // proportion bar. Uses the same levels the ladder renders, so the bar and
